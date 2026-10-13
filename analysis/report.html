@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Assignment 2 Report — 23L-0748</title>
+<style>
+  @page { size: A4; margin: 15mm 15mm 15mm 15mm; }
+  @page wide { size: A4 landscape; margin: 11mm 12mm; }
+  :root { --ink: #0b0b0b; --ink2: #52514e; --muted: #898781; --rule: #e1e0d9; --wash: #f6f6f3; --accent: #2a78d6; }
+  html { background: #fff; }
+  body { font-family: "Noto Sans", sans-serif; font-size: 9.4pt; line-height: 1.42; color: var(--ink); background: #fff; margin: 0; }
+  h1 { font-size: 21pt; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.2px; }
+  h2 { font-size: 13.5pt; font-weight: 600; margin: 20px 0 6px; padding-bottom: 3px; border-bottom: 1px solid var(--rule); break-after: avoid; }
+  h3 { font-size: 10.5pt; font-weight: 600; margin: 14px 0 4px; break-after: avoid; }
+  p { margin: 5px 0 7px; }
+  ul, ol { margin: 4px 0 8px; padding-left: 20px; }
+  li { margin: 2px 0; }
+  code, pre { font-family: "Ubuntu Mono", "DejaVu Sans Mono", monospace; }
+  code { font-size: 0.97em; background: var(--wash); padding: 0 3px; border-radius: 3px; }
+  pre { font-size: 8.2pt; line-height: 1.3; background: var(--wash); padding: 7px 9px; border-radius: 4px; margin: 6px 0 9px; white-space: pre-wrap; break-inside: avoid; }
+  pre.log { font-size: 6.9pt; line-height: 1.22; break-inside: auto; }
+  .lead { font-weight: 600; }
+  .muted { color: var(--ink2); }
+  .small { font-size: 8.3pt; }
+  .page-break { break-before: page; }
+  .wide { page: wide; }
+  figure { margin: 8px 0 12px; break-inside: avoid; }
+  figure img { width: 100%; display: block; }
+  figcaption { font-size: 8.2pt; color: var(--ink2); margin-top: 3px; }
+  table { border-collapse: collapse; margin: 6px 0 10px; break-inside: auto; }
+  th, td { border-bottom: 1px solid var(--rule); padding: 2.5px 6px; text-align: left; vertical-align: top; }
+  thead th { border-bottom: 1px solid var(--muted); font-weight: 600; }
+  table.kv th { font-weight: 600; width: 30%; color: var(--ink2); }
+  table.num { font-size: 7.6pt; font-variant-numeric: tabular-nums; width: 100%; }
+  table.num td, table.num th { padding: 2px 4px; text-align: right; }
+  table.num th.impl, table.num th:first-child { text-align: left; }
+  table.num thead th { text-align: center; }
+  table.num tr.grp td { text-align: left; background: var(--wash); font-weight: 600; padding-top: 4px; }
+  table.std { font-size: 8.3pt; font-variant-numeric: tabular-nums; }
+  table.std td.r, table.std th.r { text-align: right; }
+  caption { caption-side: top; text-align: left; font-size: 8.2pt; color: var(--ink2); padding-bottom: 3px; }
+  tr { break-inside: avoid; }
+  .cover { height: 245mm; display: flex; flex-direction: column; }
+  .cover .kicker { color: var(--ink2); font-size: 10.5pt; margin-top: 55mm; }
+  .cover .sub { font-size: 12pt; color: var(--ink2); margin-bottom: 26px; }
+  .cover table.kv { width: 100%; font-size: 10pt; }
+  .cover .toc { margin-top: 26px; font-size: 9.6pt; columns: 2; column-gap: 30px; }
+  .cover .toc ol { margin: 0; }
+  .callout { border-left: 3px solid var(--accent); background: var(--wash); padding: 6px 10px; margin: 8px 0; break-inside: avoid; }
+  .verdict-ok { color: #006300; font-weight: 600; }
+  .verdict-no { color: #b42318; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ COVER -->
+<section class="cover">
+  <div class="kicker">CS3006 Parallel and Distributed Computing · Assignment 2</div>
+  <h1>Building a Parallel Task Execution Library</h1>
+  <div class="sub">Implementation, measurements and analysis</div>
+  <table class="kv">
+    <tr><th>Student</th><td>Izen Abbas</td></tr>
+    <tr><th>Roll number</th><td>23L-0748</td></tr>
+    <tr><th>Program / semester</th><td>BS(CS)-7G · Fall 2026</td></tr>
+    <tr><th>Instructor</th><td>Mubashar Hussain</td></tr>
+    <tr><th>Due date</th><td>Wednesday, 14 October 2026</td></tr>
+  </table>
+  <div class="toc">
+    <ol>
+      <li>Setup and measurement method</li>
+      <li>Design of the task systems</li>
+      <li>Part 1 — Parallel spawn</li>
+      <li>Part 2 — Spinning thread pool</li>
+      <li>Part 3 — Sleeping thread pool</li>
+      <li>Part 4 — Scheduling and granularity</li>
+      <li>Part 5 — Asynchronous task graphs</li>
+      <li>Combined performance analysis</li>
+      <li>Appendix A — Full T<sub>1</sub>, T<sub>p</sub>, S<sub>p</sub>, E<sub>p</sub> table</li>
+      <li>Appendix B — Correctness evidence</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ============================================================ 1 -->
+<h2 class="page-break">1. Setup and measurement method</h2>
+<table class="kv">
+  <tr><th>CPU</th><td>Intel Core i7-10875H (Comet Lake), one socket</td></tr>
+  <tr><th>Cores / hardware threads</th><td>8 physical cores, 16 hardware threads (2-way SMT)</td></tr>
+  <tr><th>Clock</th><td>Turbo Boost disabled (<code>intel_pstate/no_turbo = 1</code>), so every core runs at ≤ 2.3 GHz. This keeps run-to-run timing stable.</td></tr>
+  <tr><th>Caches</th><td>32 KB L1d and 256 KB L2 per core; 16 MB shared L3</td></tr>
+  <tr><th>Operating system</th><td>Ubuntu 26.04.1 LTS, Linux 7.0.0-38-generic</td></tr>
+  <tr><th>Compiler</th><td>g++ 15.2.0 with the supplied Makefile flags: <code>-O3 -std=c++11 -Wall</code></td></tr>
+</table>
+<p><span class="lead">Interpreting worker counts.</span> With p ≤ 8, every worker can have its own physical core. At p = 16, two workers share each core as SMT siblings. Siblings share the core's execution units, so the second one adds much less than a real core, and gains between p = 8 and p = 16 should be small. The calling thread is not counted in p. It sleeps in Spawn (in <code>join</code>) and in Sleep (on a condition variable), but it busy-waits in Spin. So Spin at p = 16 has 17 runnable threads on 16 hardware threads.</p>
+<p><span class="lead">Statistic.</span> Every reported time is the <b>minimum of 5 runs</b>. <code>./runtasks -n p -i 5 &lt;test&gt;</code> creates a fresh task system for each run and prints the minimum for each implementation. The minimum is used throughout.</p>
+<p><span class="lead">Definitions.</span> <b>T<sub>1</sub> is the runtime of the supplied serial implementation</b> (<code>TaskSystemSerial</code>): the minimum over all its runs in the sweep, which is 25 runs per workload. S<sub>p</sub> = T<sub>1</sub>/T<sub>p</sub> and E<sub>p</sub> = S<sub>p</sub>/p, where p is the number of worker threads (<code>-n</code>). Because T<sub>1</sub> is the serial code, S<sub>p</sub> includes every overhead a task system adds. That is why Spawn's S<sub>1</sub> can be below 1.</p>
+<p><span class="lead">What is timed.</span> The harness times only the test's <code>run()</code>/<code>sync()</code> calls. Creating and destroying a thread pool happens outside the timed region. Spawn creates its threads inside <code>run()</code>, so that cost is always timed. This is the correct comparison for a long-lived runtime, but it hides the one-off pool start-up cost.</p>
+<p><span class="lead">Sweep.</span> p ∈ {1, 2, 4, 8, 16} for all 11 supplied synchronous workloads and the Part 4 workloads (<code>part1to4_synchronous</code> build), and for the Part 5 tests (<code>part5_async_deps</code> build).</p>
+<table class="std">
+  <caption>Supplied synchronous workloads (from <code>tests/tests.h</code>)</caption>
+  <thead><tr><th>Workload</th><th>Launches × tasks</th><th>One task</th><th>Character</th></tr></thead>
+  <tbody>
+    <tr><td><code>super_super_light</code></td><td>400 × 64</td><td>copies 512 ints</td><td>almost no work per task</td></tr>
+    <tr><td><code>super_light</code></td><td>400 × 64</td><td>512 elements × 32-iteration loop</td><td>light tasks</td></tr>
+    <tr><td><code>ping_pong_equal</code></td><td>400 × 64</td><td>8192 elements, equal cost</td><td>streams 4 MB per launch</td></tr>
+    <tr><td><code>ping_pong_unequal</code></td><td>400 × 64</td><td>cost falls linearly with task id</td><td>non-uniform: task 0 ≈ 2× average, task 63 ≈ 0</td></tr>
+    <tr><td><code>recursive_fibonacci</code></td><td>30 × 256</td><td>recursive fib(25)</td><td>coarse, compute-bound</td></tr>
+    <tr><td><code>math_operations_in_tight_for_loop</code></td><td>2000 × 16</td><td>32 elements × 150 exp/log/mul</td><td>medium tasks, many launches</td></tr>
+    <tr><td><code>…_fewer_tasks</code></td><td>2000 × 9</td><td>56–64 elements</td><td>only 9 tasks per launch</td></tr>
+    <tr><td><code>…_fan_in</code></td><td>256 × 64, then 1 × 1</td><td>math tasks, then one reduce</td><td>serial reduce at the end</td></tr>
+    <tr><td><code>…_reduction_tree</code></td><td>32 × 64, then 31 × 1</td><td>math tasks, then pairwise reduces</td><td>31 single-task launches</td></tr>
+    <tr><td><code>spin_between_run_calls</code></td><td>3 launches: 1, 2, 1 tasks</td><td>the 2 middle tasks compute fib(40)</td><td>at most 2 workers busy</td></tr>
+    <tr><td><code>mandelbrot_chunked</code></td><td>1 × 128</td><td>interleaved image rows</td><td>one coarse launch</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ 2 -->
+<h2>2. Design of the task systems</h2>
+<p>All three parallel task systems assign task ids <b>dynamically, in increasing order</b>: a free worker claims the next unclaimed id from a shared counter. A task is counted as <b>finished only after <code>runTask()</code> returns</b>, never when it is claimed. The calling thread does not execute tasks; it only waits.</p>
+
+<h3>2.1 Spawn (Part 1) — <code>TaskSystemParallelSpawn::run</code></h3>
+<pre>std::atomic&lt;int&gt; next_task(0);
+auto worker = [&amp;]() {
+    for (int id = next_task++; id &lt; num_total_tasks; id = next_task++)
+        runnable-&gt;runTask(id, num_total_tasks);
+};
+// min(num_threads, num_total_tasks) threads run worker(); the caller joins all of them.</pre>
+<p><span class="lead">Shared scheduler state.</span></p>
+<ul>
+  <li><b>The next-task counter.</b> Every worker read-modify-writes it, so it is a <code>std::atomic&lt;int&gt;</code>. <code>fetch_add</code> returns each value exactly once, so every id in [0, n) goes to exactly one worker.</li>
+  <li><b><code>runnable</code> and <code>num_total_tasks</code>.</b> Shared, but read-only during the launch. Creating a thread makes them visible to it.</li>
+  <li><b>Task outputs.</b> Written by the tasks and made visible to the caller by <code>join()</code>. That is also what makes <code>run()</code> synchronous: it returns only after every worker has run out of ids and exited.</li>
+</ul>
+<p>No more than <code>num_threads</code> threads are ever created, and none is created that would find no task.</p>
+
+<h3>2.2 Spinning pool (Part 2) — <code>TaskSystemParallelThreadPoolSpinning</code></h3>
+<p>The constructor starts <code>num_threads</code> workers that live until the destructor sets <code>shutdown_</code> and joins them. <code>mutex_</code> guards the current launch (<code>runnable_</code>, <code>num_total_tasks_</code>, <code>next_task_</code>). <code>tasks_done_</code>, <code>has_work_</code> and <code>shutdown_</code> are atomics.</p>
+<pre>while (!shutdown_) {                                // worker loop
+    if (!has_work_) continue;                       // idle: spin on an atomic load
+    std::unique_lock&lt;std::mutex&gt; lock(mutex_);
+    if (next_task_ &gt;= num_total_tasks_) continue;   // lost the race for the last task
+    int task_id = next_task_++;
+    if (next_task_ == num_total_tasks_) has_work_ = false;
+    /* copy runnable_ and num_total_tasks_, unlock, run the task */
+    tasks_done_++;                                  // counted after the task finished
+}
+// run(): publish the launch under mutex_ (reset counters, has_work_ = n &gt; 0),
+//        then spin: while (tasks_done_ &lt; n) {}</pre>
+<p>Idle workers spin on a plain atomic load (<code>has_work_</code>) and take the mutex only when a task is probably available. A spin built from repeated lock/unlock would make idle workers fight working ones for the mutex. The design stays correct across consecutive launches for two reasons:</p>
+<ol>
+  <li>Every increment of <code>tasks_done_</code> for launch k happens before <code>run(k)</code> returns, so the reset in <code>run(k+1)</code> cannot drop or misattribute an increment.</li>
+  <li>Claims happen under the same mutex that publishes a launch, so a worker can never pair a task id of launch k+1 with the runnable of launch k.</li>
+</ol>
+
+<h3>2.3 Sleeping pool (Part 3) — <code>TaskSystemParallelThreadPoolSleeping</code></h3>
+<pre>std::unique_lock&lt;std::mutex&gt; lock(mutex_);       // worker loop
+while (true) {
+    work_cv_.wait(lock, [this] { return shutdown_ || next_task_ &lt; num_total_tasks_; });
+    if (shutdown_) return;
+    int task_id = next_task_++;
+    /* copy runnable_ and num_total_tasks_ */
+    lock.unlock();  runnable-&gt;runTask(task_id, num_total_tasks);  lock.lock();
+    if (++tasks_done_ == num_total_tasks_) done_cv_.notify_one();   // last task wakes run()
+}
+// run(): lock; publish the launch; work_cv_.notify_all();
+//        done_cv_.wait(lock, [this] { return tasks_done_ == num_total_tasks_; });</pre>
+<p>All state is guarded by one mutex. After finishing a task, a worker keeps the lock to record the completion and claim its next task, so each task costs one lock round trip. The destructor sets <code>shutdown_</code> under the lock, calls <code>notify_all()</code> and joins. No thread busy-waits anywhere.</p>
+
+<!--S3-->
+
+<!--S4-->
+
+<!-- ============================================================ 5 -->
+<h2>5. Part 3 — Sleeping thread pool and synchronization</h2>
+<h3>5.1 Synchronization reasoning</h3>
+<p><span class="lead">When a worker sleeps, and what wakes it.</span> A worker sleeps on <code>work_cv_</code> while <code>!shutdown_ &amp;&amp; next_task_ &gt;= num_total_tasks_</code>, i.e. while the current launch has no unclaimed task. Two events can make the condition true:</p>
+<ul>
+  <li><code>run()</code> publishes a new launch (<code>next_task_ = 0</code>, <code>num_total_tasks_ = n &gt; 0</code>).</li>
+  <li>The destructor sets <code>shutdown_</code>.</li>
+</ul>
+<p>Both happen while holding <code>mutex_</code>, and both are followed by <code>work_cv_.notify_all()</code>. Finishing a task can never make the condition true, so completions do not wake sleeping workers.</p>
+<p><span class="lead">What the calling thread waits for.</span> <code>run()</code> sleeps on <code>done_cv_</code> while <code>tasks_done_ != num_total_tasks_</code>. Whichever worker raises <code>tasks_done_</code> to <code>num_total_tasks_</code>, i.e. the last task to finish (not necessarily task n−1), calls <code>done_cv_.notify_one()</code>. For n = 0 the condition already holds and <code>run()</code> returns immediately.</p>
+<p><span class="lead">An incorrect interleaving.</span> Suppose completion were tracked at claim time, i.e. <code>run()</code> waited for <code>next_task_ == n</code> or a worker incremented <code>tasks_done_</code> before calling <code>runTask</code>:</p>
+<ol>
+  <li>Worker W1 claims the last task n−1 (<code>next_task_</code> becomes n) and releases the mutex.</li>
+  <li>The caller wakes, sees the launch “complete”, and returns from <code>run()</code>, even though task n−1 has not started.</li>
+  <li>The test checks its output (task n−1's elements are missing), or the program calls <code>run()</code> again, which resets the counters.</li>
+  <li>W1 now executes task n−1 of the <i>old</i> launch. With the increment-after variant, its late increment also lands in the new launch's counter, so that <code>run()</code> can return one task early as well. The error propagates.</li>
+</ol>
+<p>My implementation increments <code>tasks_done_</code> only after <code>runTask()</code> returns, and under the mutex. So <code>tasks_done_ == n</code> implies that every task has returned.</p>
+<p><span class="lead">Why the condition is checked in a loop.</span> <code>wait(lock, pred)</code> is <code>while (!pred()) wait(lock);</code>. The loop is required for four reasons:</p>
+<ol>
+  <li>Spurious wakeups are permitted.</li>
+  <li><code>notify_all()</code> wakes every sleeping worker, but a launch with fewer tasks than workers leaves most of them nothing to do. In <code>spin_between_run_calls</code>, 16 workers wake for a 1-task launch; 15 must re-check and go back to sleep.</li>
+  <li>Between the notify and re-acquiring the mutex, another thread may already have claimed the last task.</li>
+  <li>If the condition is already true, the thread must not wait at all. The predicate is checked under the mutex before sleeping, so a notification sent before the wait cannot be lost.</li>
+</ol>
+
+<!--S5DATA-->
+
+<!-- ============================================================ 6 -->
+<h2>6. Part 4 — Scheduling and granularity</h2>
+<p><span class="lead">Added workload.</span> <code>IrregularTask</code> in <code>tests/tests.h</code> gives every item a known cost by busy-waiting on <code>steady_clock</code>. Items in the first half are cheap and items in the second half are expensive (the handout's 1,1,1,1,10,10,10,10 pattern). Each task processes <code>chunk</code> consecutive items, so a launch has ⌈N/chunk⌉ tasks, and every item must be processed exactly once. It runs through the existing task systems; no separate scheduler was written.</p>
+<ul>
+  <li><code>irregular_example_dynamic</code> / <code>irregular_example_static</code>: the handout's 8 items (1, 1, 1, 1, 10, 10, 10, 10 ms). Chunk 1 gives 8 tasks, claimed next-task. Chunk 2 gives 4 contiguous tasks, so with 4 workers each worker gets exactly one block: the static contiguous assignment.</li>
+  <li><code>irregular_chunk_{1,16,256,4096,65536}</code>: N = 2<sup>18</sup> fine-grained items costing 0.1 µs (first half) or 1 µs (second half), in chunks of 1 to 65536 (= N/4) items per task.</li>
+</ul>
+
+<h3>6.1 Static vs dynamic timelines (4 workers, handout pattern)</h3>
+<figure>
+  <img src="figures/part4_timelines.png" alt="Gantt charts for static and dynamic assignment">
+  <figcaption>Figure 4.1 — Timelines for the 1,1,1,1,10,10,10,10 ms tasks on 4 workers. Gaps between bars are only visual separators.</figcaption>
+</figure>
+<table class="std">
+  <thead><tr><th>Assignment</th><th>W0 busy</th><th>W1 busy</th><th>W2 busy</th><th>W3 busy</th><th class="r">Makespan</th><th class="r">Mean utilization</th></tr></thead>
+  <tbody>
+    <tr><td>Static contiguous: W<sub>i</sub> gets tasks 2i, 2i+1</td><td>T0+T1 = 2 ms (10%)</td><td>T2+T3 = 2 ms (10%)</td><td>T4+T5 = 20 ms (100%)</td><td>T6+T7 = 20 ms (100%)</td><td class="r">20 ms</td><td class="r">44 / (4×20) = 55%</td></tr>
+    <tr><td>Dynamic next-task</td><td>T0, T4 = 11 ms (100%)</td><td>T1, T5 = 11 ms (100%)</td><td>T2, T6 = 11 ms (100%)</td><td>T3, T7 = 11 ms (100%)</td><td class="r">11 ms</td><td class="r">44 / (4×11) = 100%</td></tr>
+  </tbody>
+</table>
+<p>Utilization = busy time ÷ makespan. Under static assignment, W0 and W1 finish their two 1 ms tasks at t = 2 ms and then sit idle for 18 ms, while W2 and W3 each run two 10 ms tasks back to back. With dynamic assignment, the four 1 ms tasks are claimed first. At t = 1 ms every worker claims one 10 ms task, and all finish at 11 ms. That equals total work ÷ p = 44/4, so it is optimal: 1.82× better than static.</p>
+
+<!--S6DATA-->
+
+<!-- ============================================================ 7 -->
+<h2>7. Part 5 — Asynchronous task graphs with dependencies</h2>
+<h3>7.1 Implementation (<code>part5_async_deps/tasksys.cpp</code>, sleeping pool)</h3>
+<pre>struct Launch { IRunnable* runnable; int num_total_tasks, next_task, tasks_done, unmet_deps;
+                std::vector&lt;TaskID&gt; dependents; };            // launches waiting for this one
+std::unordered_map&lt;TaskID, Launch&gt; launches_;   // unfinished launches only
+std::deque&lt;TaskID&gt; ready_;                      // deps satisfied, tasks left to hand out
+// one mutex_ guards everything; work_cv_ wakes workers, done_cv_ wakes sync()</pre>
+<ul>
+  <li><b><code>runAsyncWithDeps</code></b>, all under the mutex. It gives the launch the next id (0, 1, 2, …, so ids are unique). For every dependency still in <code>launches_</code>, it appends the new id to that dependency's <code>dependents</code> and increments <code>unmet_deps</code>; a dependency that is no longer in the table has already finished. If <code>unmet_deps == 0</code>, the launch goes into <code>ready_</code> and <code>notify_all()</code> wakes the workers. It then returns without waiting.</li>
+  <li><b>Worker.</b> It sleeps until <code>ready_</code> is non-empty, then claims the next task of the launch at the front. When the last task of that launch has been <i>claimed</i>, the launch leaves <code>ready_</code>, so other workers move on to the next ready launch while its stragglers finish. Independent ready launches therefore run concurrently. After <code>runTask</code> returns, the worker relocks and increments <code>tasks_done</code>. If that was the last task, it calls <code>launchFinished(id)</code>.</li>
+  <li><b><code>launchFinished</code></b> removes the launch from the table and decrements <code>unmet_deps</code> of each dependent. Dependents that reach 0 enter <code>ready_</code> (with <code>notify_all</code>). If the table is now empty, it calls <code>done_cv_.notify_all()</code>.</li>
+  <li><b>The other methods.</b> <code>sync()</code> waits on <code>done_cv_</code> until the table is empty. <code>run(r, n)</code> is <code>runAsyncWithDeps(r, n, {})</code> followed by <code>sync()</code>, so it stays a correct synchronous launch. A launch with 0 tasks is finished as soon as it becomes ready. The destructor calls <code>sync()</code>, then stops and joins the workers.</li>
+</ul>
+
+<h3>7.2 Custom dependency test</h3>
+<p><code>abcd_dag_async</code> builds the handout graph with exact busy-wait task costs:</p>
+<ul>
+  <li>A: 128 tasks × 1 ms</li>
+  <li>B: 2 tasks × 8 ms, depends on A</li>
+  <li>C: 6 tasks × 4 ms, depends on A</li>
+  <li>D: 32 tasks × 2 ms, depends on B and C</li>
+</ul>
+<p>The first task of each launch to start checks that every dependency launch is complete, meaning its last task has already finished. Each launch counts its started and finished tasks, which must both equal its task count. All launches must be done after <code>sync()</code>.</p>
+<p><code>abcd_dag_split_async</code> is the same graph with B replaced by four independent sub-launches B1–B4, each of 2 tasks × 2 ms (the same 16 ms of work); D depends on B1–B4 and C. Because the task costs are exact, the measured times can be compared directly with the schedules below. The cost is wall-clock busy-waiting, so two workers sharing a core still each take exactly 1 ms per A task. Real computation would slow down on SMT siblings.</p>
+
+<h3>7.3 Dependency analysis</h3>
+<p><span class="lead">Ready sets and mandatory orderings.</span> At submission, only A is ready. When the last task of A finishes, <b>B and C become ready at the same instant</b> and may run concurrently: there is no edge between them, and their 8 tasks can share the workers. D becomes ready only when <i>both</i> B and C have finished. The mandatory orderings are A→B, A→C, B→D and C→D (so A→D); B and C are unordered.</p>
+<p><span class="lead">Total work.</span></p>
+<ul>
+  <li>W<sub>A</sub> = 128 × 1 = 128 ms</li>
+  <li>W<sub>B</sub> = 2 × 8 = 16 ms</li>
+  <li>W<sub>C</sub> = 6 × 4 = 24 ms</li>
+  <li>W<sub>D</sub> = 32 × 2 = 64 ms</li>
+  <li>W = 232 ms in total</li>
+</ul>
+<p><span class="lead">Critical-path lower bound.</span> Assumptions:</p>
+<ul>
+  <li>Unlimited workers.</li>
+  <li>Zero launch and scheduling overhead.</li>
+  <li>Every task costs exactly the stated average and runs on a single worker; tasks are not divisible.</li>
+  <li>Tasks within a launch are independent.</li>
+  <li>Dependencies are between whole launches: every task of a dependency must finish before any task of the dependent starts.</li>
+</ul>
+<p>Under these assumptions, a launch lasts at least as long as its longest task: A 1 ms, B 8 ms, C 4 ms, D 2 ms. The paths are A→B→D = 1 + 8 + 2 = 11 ms and A→C→D = 1 + 4 + 2 = 7 ms, so the <b>critical path is T<sub>∞</sub> = 11 ms</b> (through B). With p workers, T<sub>p</sub> ≥ max(T<sub>∞</sub>, W/p), giving <b>T<sub>2</sub> ≥ max(11, 116) = 116 ms</b> and <b>T<sub>4</sub> ≥ max(11, 58) = 58 ms</b>.</p>
+<p><span class="lead">Schedules for 2 and 4 workers.</span> Figure 5.1 is the greedy schedule my runtime follows: free workers claim the next task, and ready launches are served FIFO (B before C). Both schedules respect the dependencies, since B and C start only after the last A task and D only after the later of B and C. They also respect capacity: at most p tasks run at any time.</p>
+<ul>
+  <li><b>2 workers.</b> A takes 0–64 ms (64 tasks each). Then B0 and B1 run on 64–72, C0–C5 three per worker on 72–84, and D 16 tasks each on 84–116. Makespan <b>116 ms</b>, equal to the bound: utilization 100%.</li>
+  <li><b>4 workers.</b> A takes 0–32 ms. W0 and W1 run B0 and B1 on 32–40; W2 and W3 run C0–C3 on 32–40. W0 and W1 then run C4 and C5 on 40–44, while W2 and W3 sit idle for 4 ms because D cannot start before C ends. D runs on 44–60. Makespan <b>60 ms</b>, against the 58 ms bound: utilization 232/(4×60) = 97%. 58 ms cannot actually be reached: the B/C phase packs tasks of 8, 8, 4, 4, 4, 4, 4 and 4 ms onto 4 workers, and no packing finishes in under 12 ms (an 8 ms task cannot share a worker with a 4 ms one within 10 ms).</li>
+</ul>
+<figure>
+  <img src="figures/part5_schedules.png" alt="Schedules of the A, B, C, D graph on 2 and 4 workers">
+  <figcaption>Figure 5.1 — Valid schedules for the dependency graph with 2 and 4 workers. Repeated short tasks of A and D are drawn as one bar per worker.</figcaption>
+</figure>
+<p><span class="lead">Why doubling the workers does not halve the time.</span> The same greedy schedule gives 232, 116, 60, 32 and 20 ms for p = 1, 2, 4, 8 and 16, i.e. ×2.0, ×1.93, ×1.88 and ×1.6 per doubling. Three effects stop the halving:</p>
+<ol>
+  <li>The B/C phase has only 8 tasks, and two of them last 8 ms. Once p ≥ 8, that phase cannot shrink below 8 ms, whatever p is.</li>
+  <li>D waits for the <i>slowest</i> of B and C, so workers that finish early idle at the barrier, as W2 and W3 do at p = 4.</li>
+  <li>No schedule beats the 11 ms critical path; A is the only phase that keeps scaling.</li>
+</ol>
+<p>At p = 16, A takes 8 ms, B/C takes 8 ms and D takes 4 ms. The time is now dominated by B's 8 ms tasks, not by the amount of work.</p>
+<p><span class="lead">Bookkeeping when the final task of a launch finishes.</span> The worker relocks, raises <code>tasks_done</code> to <code>num_total_tasks</code>, and in <code>launchFinished</code>:</p>
+<ol>
+  <li>Removes the launch from the unfinished table. From now on it counts as satisfied for any future <code>runAsyncWithDeps</code>.</li>
+  <li>Walks its <code>dependents</code> list, decrementing each dependent's <code>unmet_deps</code>.</li>
+  <li>Moves every dependent whose count reaches 0 from blocked to ready (into <code>ready_</code>, with <code>notify_all</code>).</li>
+  <li>Wakes <code>sync()</code> if no unfinished launch remains.</li>
+</ol>
+<p>Only the <b>direct dependents</b> of the finishing launch can change state at that instant, and only those for which it was the last unfinished dependency. Nothing else is scanned. In this graph, A's completion makes both B and C ready. Whichever of B and C finishes first changes nothing (D still has one unmet dependency). The later one makes D ready.</p>
+<p><span class="lead">A race that could start a dependent early, and the invariant that prevents it.</span> Suppose a launch were treated as complete when its last task was <i>claimed</i> (<code>next_task == n</code>) rather than when it <i>finished</i>:</p>
+<ol>
+  <li>W1 claims B's last task.</li>
+  <li>The runtime marks B complete and releases D.</li>
+  <li>W2 starts D while B's last task is still running. <code>strict_diamond_deps_async</code> and my <code>abcd_dag_async</code> detect exactly this.</li>
+</ol>
+<p>A second variant is check-then-register without the lock. A new launch sees dependency X as unfinished. X then finishes and processes a <code>dependents</code> list that does not yet contain the new launch. The new launch then registers and waits forever.</p>
+<p>The invariant: <i>a launch is in <code>ready_</code>, or has any task handed out, only if every launch it depends on has <code>tasks_done == num_total_tasks</code>, i.e. all of its <code>runTask</code> calls have returned.</i> It holds because of three facts:</p>
+<ol>
+  <li><code>unmet_deps</code> counts exactly the dependencies that were unfinished at registration, and registration and completion are serialized by the same mutex.</li>
+  <li><code>unmet_deps</code> is decremented only by <code>launchFinished</code>, which runs after the last <code>runTask</code> has returned.</li>
+  <li>Workers take tasks only from <code>ready_</code>.</li>
+</ol>
+
+<!--S7DATA-->
+
+<!--S8-->
+
+</body>
+</html>
