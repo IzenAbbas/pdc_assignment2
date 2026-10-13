@@ -2,6 +2,11 @@
 #define _TASKSYS_H
 
 #include "itasksys.h"
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -34,6 +39,8 @@ class TaskSystemParallelSpawn: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+    private:
+        int num_threads_;    // maximum number of worker threads per run()
 };
 
 /*
@@ -51,6 +58,20 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+    private:
+        void workerLoop();
+
+        std::vector<std::thread> workers_;
+
+        // The current bulk launch. Guarded by mutex_.
+        std::mutex mutex_;
+        IRunnable* runnable_;
+        int num_total_tasks_;
+        int next_task_;                 // next task id to hand out
+
+        std::atomic<bool> has_work_;    // hint: unclaimed tasks may exist (lets idle workers spin without the lock)
+        std::atomic<int> tasks_done_;   // tasks of the current launch that have finished
+        std::atomic<bool> shutdown_;
 };
 
 /*
@@ -68,6 +89,20 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+    private:
+        void workerLoop();
+
+        std::vector<std::thread> workers_;
+
+        // Everything below is guarded by mutex_.
+        std::mutex mutex_;
+        std::condition_variable work_cv_;   // workers wait here for an unclaimed task (or shutdown)
+        std::condition_variable done_cv_;   // run() waits here for the launch to finish
+        IRunnable* runnable_;
+        int num_total_tasks_;
+        int next_task_;                     // next task id to hand out
+        int tasks_done_;                    // tasks of the current launch that have finished
+        bool shutdown_;
 };
 
 #endif

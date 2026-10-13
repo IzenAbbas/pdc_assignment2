@@ -1403,3 +1403,274 @@ TestResults strictGraphDepsMedium(ITaskSystem* t) {
 TestResults strictGraphDepsLarge(ITaskSystem* t) {
     return strictGraphDepsTestBase(t,1000,20000,0);
 }
+
+/*
+ * ==================================================================
+ *   Student tests (Parts 1, 4 and 5)
+ * ==================================================================
+ */
+
+/*
+ * Keeps the CPU busy for `ns` nanoseconds. Gives tasks an exact, known cost
+ * so measured makespans can be compared with hand-calculated timelines.
+ */
+static inline void busyWaitNs(long long ns) {
+    auto start = std::chrono::steady_clock::now();
+    while (std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now() - start).count() < ns) {
+    }
+}
+
+/*
+ * Part 1: each task does a small, task-dependent amount of work (so tasks
+ * finish out of order) and then atomically counts its own execution.
+ */
+class CountingTask : public IRunnable {
+    public:
+        std::atomic<int>* counts_;
+        CountingTask(std::atomic<int>* counts) : counts_(counts) {}
+        ~CountingTask() {}
+
+        void runTask(int task_id, int num_total_tasks) {
+            busyWaitNs((task_id * 7919) % 2000);
+            counts_[task_id]++;
+        }
+};
+
+/*
+ * Correctness stress test (Part 1): many back-to-back launches whose task
+ * counts are zero, very small, not divisible by common worker counts, and
+ * large. Right after each run() returns, every task of that launch must have
+ * run exactly once (checks both exactly-once execution and synchronous
+ * completion).
+ */
+TestResults exactlyOnceStressTest(ITaskSystem* t) {
+    const int task_counts[] = {0, 1, 2, 3, 5, 7, 8, 9, 15, 16, 17, 31, 33,
+                               63, 64, 65, 127, 1000, 4099};
+    const int max_tasks = 4099;
+    const int num_rounds = 20;
+
+    std::atomic<int>* counts = new std::atomic<int>[max_tasks];
+    CountingTask task(counts);
+
+    TestResults results;
+    results.passed = true;
+    results.time = 0.0;
+    for (int round = 0; round < num_rounds && results.passed; round++) {
+        for (int n : task_counts) {
+            for (int i = 0; i < n; i++) {
+                counts[i] = 0;
+            }
+            double start_time = CycleTimer::currentSeconds();
+            t->run(&task, n);
+            results.time += CycleTimer::currentSeconds() - start_time;
+
+            for (int i = 0; i < n; i++) {
+                if (counts[i] != 1) {
+                    printf("launch of %d tasks: task %d ran %d times\n",
+                           n, i, counts[i].load());
+                    results.passed = false;
+                    break;
+                }
+            }
+            if (!results.passed) {
+                break;
+            }
+        }
+    }
+
+    delete [] counts;
+    return results;
+}
+
+/*
+ * Part 4 irregular workload: item i costs `cheap_ns` if it is in the first
+ * half of the items and `expensive_ns` otherwise (the handout's
+ * 1,1,1,1,10,10,10,10 pattern, scaled). Each task processes `chunk`
+ * consecutive items, so a launch has ceil(num_items / chunk) tasks.
+ */
+class IrregularTask : public IRunnable {
+    public:
+        int num_items_;
+        int chunk_;
+        long long cheap_ns_;
+        long long expensive_ns_;
+        int* done_;
+        IrregularTask(int num_items, int chunk, long long cheap_ns,
+                      long long expensive_ns, int* done)
+            : num_items_(num_items), chunk_(chunk), cheap_ns_(cheap_ns),
+              expensive_ns_(expensive_ns), done_(done) {}
+        ~IrregularTask() {}
+
+        void runTask(int task_id, int num_total_tasks) {
+            int start = task_id * chunk_;
+            int end = std::min(start + chunk_, num_items_);
+            for (int i = start; i < end; i++) {
+                busyWaitNs(i < num_items_ / 2 ? cheap_ns_ : expensive_ns_);
+                done_[i]++;
+            }
+        }
+};
+
+TestResults irregularTest(ITaskSystem* t, int num_items, int chunk,
+                          long long cheap_ns, long long expensive_ns) {
+    int* done = new int[num_items]();
+    IrregularTask task(num_items, chunk, cheap_ns, expensive_ns, done);
+    int num_tasks = (num_items + chunk - 1) / chunk;
+
+    double start_time = CycleTimer::currentSeconds();
+    t->run(&task, num_tasks);
+    double end_time = CycleTimer::currentSeconds();
+
+    TestResults results;
+    results.passed = true;
+    for (int i = 0; i < num_items; i++) {
+        if (done[i] != 1) {
+            printf("item %d processed %d times\n", i, done[i]);
+            results.passed = false;
+            break;
+        }
+    }
+    results.time = end_time - start_time;
+
+    delete [] done;
+    return results;
+}
+
+// Handout example: 8 items costing 1,1,1,1,10,10,10,10 ms. One item per
+// task gives dynamic next-task assignment.
+TestResults irregularExampleDynamicTest(ITaskSystem* t) {
+    return irregularTest(t, 8, 1, 1000000, 10000000);
+}
+
+// Same items, two contiguous items per task: with 4 workers each worker gets
+// one block, i.e. the static contiguous assignment.
+TestResults irregularExampleStaticTest(ITaskSystem* t) {
+    return irregularTest(t, 8, 2, 1000000, 10000000);
+}
+
+// Granularity experiment: 2^18 fine-grained items costing 0.1 us or 1 us,
+// combined into chunks of `chunk` items per task (65536 = N/4).
+TestResults irregularChunkTest(ITaskSystem* t, int chunk) {
+    return irregularTest(t, 1 << 18, chunk, 100, 1000);
+}
+
+TestResults irregularChunk1Test(ITaskSystem* t) {
+    return irregularChunkTest(t, 1);
+}
+
+TestResults irregularChunk16Test(ITaskSystem* t) {
+    return irregularChunkTest(t, 16);
+}
+
+TestResults irregularChunk256Test(ITaskSystem* t) {
+    return irregularChunkTest(t, 256);
+}
+
+TestResults irregularChunk4096Test(ITaskSystem* t) {
+    return irregularChunkTest(t, 4096);
+}
+
+TestResults irregularChunk65536Test(ITaskSystem* t) {
+    return irregularChunkTest(t, 65536);
+}
+
+/*
+ * Part 5: one bulk launch of the dependency test. Every task busy-waits for
+ * cost_ns. The first task of the launch to start checks that every
+ * dependency launch has completely finished; the last task to finish marks
+ * this launch done.
+ */
+class DagLaunchTask : public IRunnable {
+    public:
+        int num_tasks_;
+        long long cost_ns_;
+        std::vector<DagLaunchTask*> deps_;
+        std::atomic<int> started_;
+        std::atomic<int> finished_;
+        std::atomic<bool> done_;
+        bool deps_ok_;
+        DagLaunchTask(int num_tasks, long long cost_ns,
+                      const std::vector<DagLaunchTask*>& deps)
+            : num_tasks_(num_tasks), cost_ns_(cost_ns), deps_(deps),
+              started_(0), finished_(0), done_(false), deps_ok_(false) {}
+        ~DagLaunchTask() {}
+
+        void runTask(int task_id, int num_total_tasks) {
+            if (started_++ == 0) {
+                deps_ok_ = true;
+                for (DagLaunchTask* d : deps_) {
+                    if (!d->done_) {
+                        deps_ok_ = false;
+                    }
+                }
+            }
+            busyWaitNs(cost_ns_);
+            if (++finished_ == num_total_tasks) {
+                done_ = true;
+            }
+        }
+};
+
+/*
+ * The DAG from the handout: A (128 tasks x 1 ms) -> B (2 x 8 ms) and
+ * C (6 x 4 ms) -> D (32 x 2 ms). With split_b, B is replaced by four
+ * independent sub-launches of 2 tasks x 2 ms each (same total work).
+ */
+TestResults abcdDagTest(ITaskSystem* t, bool split_b) {
+    const long long ms = 1000000;
+    std::vector<DagLaunchTask*> no_launches;
+    DagLaunchTask a(128, 1 * ms, no_launches);
+    std::vector<DagLaunchTask*> after_a(1, &a);
+    std::vector<DagLaunchTask*> b_parts;
+    for (int i = 0; i < (split_b ? 4 : 1); i++) {
+        b_parts.push_back(new DagLaunchTask(2, (split_b ? 2 : 8) * ms, after_a));
+    }
+    DagLaunchTask c(6, 4 * ms, after_a);
+    std::vector<DagLaunchTask*> after_b_and_c = b_parts;
+    after_b_and_c.push_back(&c);
+    DagLaunchTask d(32, 2 * ms, after_b_and_c);
+
+    double start_time = CycleTimer::currentSeconds();
+    std::vector<TaskID> no_deps;
+    std::vector<TaskID> a_deps(1, t->runAsyncWithDeps(&a, a.num_tasks_, no_deps));
+    std::vector<TaskID> d_deps;
+    for (DagLaunchTask* b : b_parts) {
+        d_deps.push_back(t->runAsyncWithDeps(b, b->num_tasks_, a_deps));
+    }
+    d_deps.push_back(t->runAsyncWithDeps(&c, c.num_tasks_, a_deps));
+    t->runAsyncWithDeps(&d, d.num_tasks_, d_deps);
+    t->sync();
+    double end_time = CycleTimer::currentSeconds();
+
+    std::vector<DagLaunchTask*> launches = b_parts;
+    launches.push_back(&a);
+    launches.push_back(&c);
+    launches.push_back(&d);
+
+    TestResults results;
+    results.passed = true;
+    for (DagLaunchTask* l : launches) {
+        if (!l->done_ || !l->deps_ok_ || l->started_ != l->num_tasks_ ||
+            l->finished_ != l->num_tasks_) {
+            printf("launch with %d tasks: done=%d deps_ok=%d started=%d finished=%d\n",
+                   l->num_tasks_, (int)l->done_, (int)l->deps_ok_,
+                   l->started_.load(), l->finished_.load());
+            results.passed = false;
+        }
+    }
+    results.time = end_time - start_time;
+
+    for (DagLaunchTask* b : b_parts) {
+        delete b;
+    }
+    return results;
+}
+
+TestResults abcdDagAsyncTest(ITaskSystem* t) {
+    return abcdDagTest(t, false);
+}
+
+TestResults abcdDagSplitAsyncTest(ITaskSystem* t) {
+    return abcdDagTest(t, true);
+}
