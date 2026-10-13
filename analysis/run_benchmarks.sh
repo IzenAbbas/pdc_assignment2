@@ -9,6 +9,10 @@ OUT=$ROOT/analysis/results
 WORKERS="1 2 4 8 16"
 mkdir -p "$OUT"
 
+# Only one sweep at a time: concurrent sweeps compete for cores and corrupt timings.
+exec 9> "$OUT/.bench.lock"
+flock -n 9 || { echo "another benchmark sweep is already running"; exit 1; }
+
 # Parts 1-4: supplied sync workloads + Part 4 irregular workloads (part1to4 build).
 SYNC_TESTS="super_super_light super_light ping_pong_equal ping_pong_unequal
 recursive_fibonacci math_operations_in_tight_for_loop
