@@ -21,7 +21,11 @@ math_operations_in_tight_for_loop_fewer_tasks_async math_operations_in_tight_for
 math_operations_in_tight_for_loop_reduction_tree_async mandelbrot_chunked_async
 spin_between_run_calls_async strict_diamond_deps_async strict_graph_deps_small_async
 strict_graph_deps_med_async strict_graph_deps_large_async
-abcd_dag_async abcd_dag_split_async simple_test_sync exactly_once_stress"
+abcd_dag_async abcd_dag_split_async simple_test_sync exactly_once_stress
+super_super_light super_light ping_pong_equal ping_pong_unequal recursive_fibonacci
+math_operations_in_tight_for_loop math_operations_in_tight_for_loop_fewer_tasks
+math_operations_in_tight_for_loop_fan_in math_operations_in_tight_for_loop_reduction_tree
+spin_between_run_calls mandelbrot_chunked"
 
 run_all() {  # run_all <dir> <outfile> <tests...>
     local dir=$1 file=$2; shift 2

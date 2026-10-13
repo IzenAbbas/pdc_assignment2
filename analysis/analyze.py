@@ -116,9 +116,101 @@ def write(name, html):
     (GEN / name).write_text(html)
 
 
+def compare_html(tests, ps, data=SYNC, impls=IMPLS, caption=""):
+    """Rows = (workload, p); columns = T1 and Tp of each implementation; fastest in bold."""
+    head = "".join(f'<th class="r">{i} (ms)</th>' for i in impls)
+    rows = []
+    for test in tests:
+        for k, p in enumerate(ps):
+            vals = {i: tp(data, test, i, p) for i in impls}
+            best = min(vals.values())
+            cells = "".join(f'<td class="r">{"<b>" if vals[i] == best else ""}{fmt(vals[i])}'
+                            f'{"</b>" if vals[i] == best else ""}</td>' for i in impls)
+            name = f"<code>{test}</code>" if k == 0 else ""
+            t1cell = f'<td class="r">{fmt(t1(data, test))}</td>' if k == 0 else '<td></td>'
+            rows.append(f"<tr><td>{name}</td>{t1cell}<td class='r'>{p}</td>{cells}</tr>")
+    cap = f"<caption>{caption}</caption>" if caption else ""
+    return (f'<table class="std">{cap}<thead><tr><th>Workload</th><th class="r">T<sub>1</sub> (ms)</th>'
+            f'<th class="r">p</th>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table>')
+
+
+def granularity_html():
+    T1 = t1(SYNC, "irregular_chunk_1")
+    head = "".join(f'<th class="r">{i}</th>' for i in IMPLS)
+    rows = []
+    for c in CHUNKS:
+        cells = []
+        for p in (4, 16):
+            vals = {i: tp(SYNC, f"irregular_chunk_{c}", i, p) for i in IMPLS}
+            cells += [f'<td class="r">{fmt(vals[i])}</td>' for i in IMPLS]
+        rows.append(f'<tr><td class="r">{c}</td><td class="r">{N_ITEMS // c:,}</td>{"".join(cells)}</tr>')
+    return (f'<table class="std"><caption>Irregular workload, N = 2<sup>18</sup> items, T<sub>1</sub> = {fmt(T1)} ms '
+            f'(ideal T<sub>1</sub>/4 = {fmt(T1 / 4)} ms, T<sub>1</sub>/16 = {fmt(T1 / 16)} ms). Times in ms.</caption>'
+            f'<thead><tr><th class="r" rowspan="2">Chunk</th><th class="r" rowspan="2">Tasks</th>'
+            f'<th colspan="3" style="text-align:center">p = 4</th><th colspan="3" style="text-align:center">p = 16</th></tr>'
+            f'<tr>{head}{head}</tr></thead><tbody>{"".join(rows)}</tbody></table>')
+
+
+DAG_PRED = {"abcd_dag_async": [232, 116, 60, 32, 20], "abcd_dag_split_async": [232, 116, 60, 30, 16]}
+
+
+def dag_html():
+    rows = []
+    for p_i, p in enumerate(P):
+        cells = ""
+        for t in DAG_PRED:
+            m = ASYNC[(t, p)]["Sleep"]
+            pred = DAG_PRED[t][p_i]
+            cells += f'<td class="r">{pred}</td><td class="r">{m:.1f}</td><td class="r">{m - pred:+.1f}</td>'
+        rows.append(f'<tr><td class="r">{p}</td>{cells}</tr>')
+    sub = '<th class="r">schedule</th><th class="r">measured</th><th class="r">diff.</th>' * 2
+    return ('<table class="std"><caption>Custom dependency test on the sleeping pool (ms). "Schedule" is the greedy '
+            'FIFO schedule computed by hand; "measured" is the minimum of 5 runs.</caption>'
+            '<thead><tr><th class="r" rowspan="2">p</th><th colspan="3" style="text-align:center"><code>abcd_dag_async</code></th>'
+            '<th colspan="3" style="text-align:center"><code>abcd_dag_split_async</code></th></tr>'
+            f'<tr>{sub}</tr></thead><tbody>{"".join(rows)}</tbody></table>')
+
+
+def sync_async_html():
+    rows = []
+    for base in ["math_operations_in_tight_for_loop_fewer_tasks", "math_operations_in_tight_for_loop_fan_in"]:
+        for k, p in enumerate(P):
+            s, a = ASYNC[(base, p)]["Sleep"], ASYNC[(base + "_async", p)]["Sleep"]
+            name = f"<code>{base}</code>" if k == 0 else ""
+            rows.append(f'<tr><td>{name}</td><td class="r">{p}</td><td class="r">{fmt(s)}</td>'
+                        f'<td class="r">{fmt(a)}</td><td class="r">{s / a:.2f}×</td></tr>')
+    return ('<table class="std"><caption>Sleeping pool of the Part 5 build: the same launches submitted with '
+            'synchronous <code>run()</code> vs. asynchronous <code>runAsyncWithDeps()</code> + <code>sync()</code> (ms).</caption>'
+            '<thead><tr><th>Workload</th><th class="r">p</th><th class="r">run() each launch</th>'
+            '<th class="r">async + sync()</th><th class="r">gain</th></tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table>')
+
+
+def example_html():
+    rows = []
+    for t, pred in [("irregular_example_static", 20), ("irregular_example_dynamic", 11)]:
+        v = SYNC[(t, 4)]
+        rows.append(f'<tr><td><code>{t}</code></td><td class="r">{pred}</td>' +
+                    "".join(f'<td class="r">{v[i]:.2f}</td>' for i in ["Serial"] + IMPLS) + "</tr>")
+    return ('<table class="std"><caption>Measured at p = 4 (ms, minimum of 5 runs).</caption><thead><tr>'
+            '<th>Test</th><th class="r">timeline</th><th class="r">Serial</th><th class="r">Spawn</th>'
+            '<th class="r">Spin</th><th class="r">Sleep</th></tr></thead><tbody>' + "".join(rows) + "</tbody></table>")
+
+
 if SYNC:
     write("table_all.html", table_html(list(WORKLOADS)))
-    write("table_part1.html", table_html(["super_super_light", "recursive_fibonacci", "ping_pong_unequal"]))
+    write("table_part1.html", table_html(["super_super_light", "recursive_fibonacci", "ping_pong_unequal"],
+                                         impls=["Spawn"]))
+    write("cmp_part2.html", compare_html(["super_super_light", "super_light", "math_operations_in_tight_for_loop",
+                                          "recursive_fibonacci", "mandelbrot_chunked"], [4, 8, 16]))
+    write("cmp_part3.html", compare_html(["super_super_light", "math_operations_in_tight_for_loop",
+                                          "spin_between_run_calls"], [2, 4, 8, 16]))
+    if ("irregular_chunk_1", 4) in SYNC:
+        write("granularity.html", granularity_html())
+        write("example.html", example_html())
+if ASYNC:
+    write("dag.html", dag_html())
+    write("sync_async.html", sync_async_html())
 
 
 # ---------------------------------------------------------------- figures

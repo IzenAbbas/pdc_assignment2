@@ -185,7 +185,7 @@ while (true) {
   <li>Worker W1 claims the last task n−1 (<code>next_task_</code> becomes n) and releases the mutex.</li>
   <li>The caller wakes, sees the launch “complete”, and returns from <code>run()</code>, even though task n−1 has not started.</li>
   <li>The test checks its output (task n−1's elements are missing), or the program calls <code>run()</code> again, which resets the counters.</li>
-  <li>W1 now executes task n−1 of the <i>old</i> launch. With the increment-after variant, its late increment also lands in the new launch's counter, so that <code>run()</code> can return one task early as well. The error propagates.</li>
+  <li>W1 now executes task n−1 of the old launch, after <code>run()</code> has already returned. Its results arrive too late. If it then updates the shared completion counter, that update counts toward the new launch, so the next <code>run()</code> can return one task early too.</li>
 </ol>
 <p>My implementation increments <code>tasks_done_</code> only after <code>runTask()</code> returns, and under the mutex. So <code>tasks_done_ == n</code> implies that every task has returned.</p>
 <p><span class="lead">Why the condition is checked in a loop.</span> <code>wait(lock, pred)</code> is <code>while (!pred()) wait(lock);</code>. The loop is required for four reasons:</p>
@@ -308,6 +308,32 @@ std::deque&lt;TaskID&gt; ready_;                      // deps satisfied, tasks l
 <!--S7DATA-->
 
 <!--S8-->
+
+<!-- ============================================================ APPENDIX A -->
+<section class="wide">
+<h2 class="page-break">Appendix A — T<sub>1</sub>, T<sub>p</sub>, S<sub>p</sub>, E<sub>p</sub> for every reported measurement</h2>
+<p class="small muted">Every time is the minimum of 5 runs. T<sub>1</sub> is the supplied serial implementation (minimum of its 25 runs). S<sub>p</sub> = T<sub>1</sub>/T<sub>p</sub>, E<sub>p</sub> = S<sub>p</sub>/p, and p is the number of worker threads. Part 4 and Part 5 measurements are in Tables 6.1–7.3.</p>
+<!--INCLUDE:generated/table_all.html-->
+</section>
+
+<!-- ============================================================ APPENDIX B -->
+<h2 class="page-break">Appendix B — Correctness evidence</h2>
+<p>Below is the unedited output of every supplied test and of my own tests. <code>tests/main.cpp</code> checks each result and stops with <code>ERROR: Results did not pass correctness check!</code> on the first failure, so every printed timing line is a passing run. In the Part 5 build, only <code>Parallel + Thread Pool + Sleep</code> is my implementation; the other three are the provided serial stubs, which the handout says need not be implemented there.</p>
+<p>Additional checks, all passed:</p>
+<ol>
+  <li>Every test of both builds was run with p = 1, 3, 16 and 32 (32 is twice the hardware threads).</li>
+  <li><code>exactly_once_stress</code>, <code>strict_diamond_deps_async</code> and <code>strict_graph_deps_large_async</code> were each repeated 30 times at p = 2, 5, 8 and 16.</li>
+  <li>Both builds were compiled with ThreadSanitizer (<code>-fsanitize=thread</code>, outside the Makefile) and run at p = 3 and 8 on the simple, super-light, exactly-once, irregular, diamond, medium-graph and ABCD tests. It reported no data race.</li>
+</ol>
+<h3>B.1 <code>part1to4_synchronous</code> — <code>./runtasks -n 8 -i 3 &lt;test&gt;</code></h3>
+<!--INCLUDE-PRE:results/evidence_part1to4.txt-->
+<h3>B.2 <code>part5_async_deps</code> — <code>./runtasks -n 8 -i 3 &lt;test&gt;</code></h3>
+<!--INCLUDE-PRE:results/evidence_part5.txt-->
+<h3>B.3 <code>part5_async_deps</code> — <code>./runtasks -n 16 -i 1 simple_run_deps_test</code></h3>
+<p class="small muted">The tasks sleep for 1, 5 and 10 s, so this test was run once. The serial stubs take about 160 s each.</p>
+<!--INCLUDE-PRE:results/evidence_part5_simple_run_deps.txt-->
+<h3>B.4 Comparison with the supplied reference binary — <code>python3 ../tests/run_test_harness.py -n 16</code></h3>
+<!--INCLUDE-PRE:results/harness_part1to4.txt-->
 
 </body>
 </html>
