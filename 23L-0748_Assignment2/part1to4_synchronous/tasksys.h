@@ -40,7 +40,7 @@ class TaskSystemParallelSpawn: public ITaskSystem {
                                 const std::vector<TaskID>& deps);
         void sync();
     private:
-        int num_threads_;    // maximum number of worker threads per run()
+        int num_threads_;
 };
 
 /*
@@ -63,14 +63,13 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
 
         std::vector<std::thread> workers_;
 
-        // The current bulk launch. Guarded by mutex_.
         std::mutex mutex_;
         IRunnable* runnable_;
         int num_total_tasks_;
-        int next_task_;                 // next task id to hand out
+        int next_task_;
 
-        std::atomic<bool> has_work_;    // hint: unclaimed tasks may exist (lets idle workers spin without the lock)
-        std::atomic<int> tasks_done_;   // tasks of the current launch that have finished
+        std::atomic<bool> has_work_;
+        std::atomic<int> tasks_done_;
         std::atomic<bool> shutdown_;
 };
 
@@ -94,14 +93,13 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
 
         std::vector<std::thread> workers_;
 
-        // Everything below is guarded by mutex_.
         std::mutex mutex_;
-        std::condition_variable work_cv_;   // workers wait here for an unclaimed task (or shutdown)
-        std::condition_variable done_cv_;   // run() waits here for the launch to finish
+        std::condition_variable work_cv_;
+        std::condition_variable done_cv_;
         IRunnable* runnable_;
         int num_total_tasks_;
-        int next_task_;                     // next task id to hand out
-        int tasks_done_;                    // tasks of the current launch that have finished
+        int next_task_;
+        int tasks_done_;
         bool shutdown_;
 };
 

@@ -1404,16 +1404,7 @@ TestResults strictGraphDepsLarge(ITaskSystem* t) {
     return strictGraphDepsTestBase(t,1000,20000,0);
 }
 
-/*
- * ==================================================================
- *   Student tests (Parts 1, 4 and 5)
- * ==================================================================
- */
 
-/*
- * Keeps the CPU busy for `ns` nanoseconds. Gives tasks an exact, known cost
- * so measured makespans can be compared with hand-calculated timelines.
- */
 static inline void busyWaitNs(long long ns) {
     auto start = std::chrono::steady_clock::now();
     while (std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1421,10 +1412,6 @@ static inline void busyWaitNs(long long ns) {
     }
 }
 
-/*
- * Part 1: each task does a small, task-dependent amount of work (so tasks
- * finish out of order) and then atomically counts its own execution.
- */
 class CountingTask : public IRunnable {
     public:
         std::atomic<int>* counts_;
@@ -1437,13 +1424,6 @@ class CountingTask : public IRunnable {
         }
 };
 
-/*
- * Correctness stress test (Part 1): many back-to-back launches whose task
- * counts are zero, very small, not divisible by common worker counts, and
- * large. Right after each run() returns, every task of that launch must have
- * run exactly once (checks both exactly-once execution and synchronous
- * completion).
- */
 TestResults exactlyOnceStressTest(ITaskSystem* t) {
     const int task_counts[] = {0, 1, 2, 3, 5, 7, 8, 9, 15, 16, 17, 31, 33,
                                63, 64, 65, 127, 1000, 4099};
@@ -1483,12 +1463,6 @@ TestResults exactlyOnceStressTest(ITaskSystem* t) {
     return results;
 }
 
-/*
- * Part 4 irregular workload: item i costs `cheap_ns` if it is in the first
- * half of the items and `expensive_ns` otherwise (the handout's
- * 1,1,1,1,10,10,10,10 pattern, scaled). Each task processes `chunk`
- * consecutive items, so a launch has ceil(num_items / chunk) tasks.
- */
 class IrregularTask : public IRunnable {
     public:
         int num_items_;
@@ -1537,20 +1511,14 @@ TestResults irregularTest(ITaskSystem* t, int num_items, int chunk,
     return results;
 }
 
-// Handout example: 8 items costing 1,1,1,1,10,10,10,10 ms. One item per
-// task gives dynamic next-task assignment.
 TestResults irregularExampleDynamicTest(ITaskSystem* t) {
     return irregularTest(t, 8, 1, 1000000, 10000000);
 }
 
-// Same items, two contiguous items per task: with 4 workers each worker gets
-// one block, i.e. the static contiguous assignment.
 TestResults irregularExampleStaticTest(ITaskSystem* t) {
     return irregularTest(t, 8, 2, 1000000, 10000000);
 }
 
-// Granularity experiment: 2^18 fine-grained items costing 0.1 us or 1 us,
-// combined into chunks of `chunk` items per task (65536 = N/4).
 TestResults irregularChunkTest(ITaskSystem* t, int chunk) {
     return irregularTest(t, 1 << 18, chunk, 100, 1000);
 }
@@ -1575,12 +1543,6 @@ TestResults irregularChunk65536Test(ITaskSystem* t) {
     return irregularChunkTest(t, 65536);
 }
 
-/*
- * Part 5: one bulk launch of the dependency test. Every task busy-waits for
- * cost_ns. The first task of the launch to start checks that every
- * dependency launch has completely finished; the last task to finish marks
- * this launch done.
- */
 class DagLaunchTask : public IRunnable {
     public:
         int num_tasks_;
@@ -1612,11 +1574,6 @@ class DagLaunchTask : public IRunnable {
         }
 };
 
-/*
- * The DAG from the handout: A (128 tasks x 1 ms) -> B (2 x 8 ms) and
- * C (6 x 4 ms) -> D (32 x 2 ms). With split_b, B is replaced by four
- * independent sub-launches of 2 tasks x 2 ms each (same total work).
- */
 TestResults abcdDagTest(ITaskSystem* t, bool split_b) {
     const long long ms = 1000000;
     std::vector<DagLaunchTask*> no_launches;

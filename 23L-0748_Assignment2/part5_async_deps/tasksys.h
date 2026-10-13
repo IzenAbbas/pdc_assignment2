@@ -75,28 +75,26 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
                                 const std::vector<TaskID>& deps);
         void sync();
     private:
-        // One submitted bulk launch that has not finished yet.
         struct Launch {
             IRunnable* runnable;
             int num_total_tasks;
-            int next_task;                   // next task id to hand out
-            int tasks_done;                  // tasks that have finished
-            int unmet_deps;                  // dependencies that have not finished yet
-            std::vector<TaskID> dependents;  // launches waiting for this one
+            int next_task;
+            int tasks_done;
+            int unmet_deps;
+            std::vector<TaskID> dependents;
         };
 
         void workerLoop();
-        void launchReady(TaskID id);     // caller holds mutex_
-        void launchFinished(TaskID id);  // caller holds mutex_
+        void launchReady(TaskID id);
+        void launchFinished(TaskID id);
 
         std::vector<std::thread> workers_;
 
-        // Everything below is guarded by mutex_.
         std::mutex mutex_;
-        std::condition_variable work_cv_;   // workers wait here for a ready launch (or shutdown)
-        std::condition_variable done_cv_;   // sync() waits here for all launches to finish
-        std::unordered_map<TaskID, Launch> launches_;  // unfinished launches only
-        std::deque<TaskID> ready_;          // launches whose deps are done and that have unclaimed tasks
+        std::condition_variable work_cv_;
+        std::condition_variable done_cv_;
+        std::unordered_map<TaskID, Launch> launches_;
+        std::deque<TaskID> ready_;
         TaskID next_launch_id_;
         bool shutdown_;
 };
