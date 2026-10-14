@@ -47,4 +47,4 @@ date
 chmod +x "$SUB/part1to4_synchronous/runtasks_ref_linux"
 (cd "$SUB/part1to4_synchronous" && python3 ../tests/run_test_harness.py -n 16) > "$OUT/harness_part1to4.txt" 2>&1
 date
-echo "EVIDENCE DONE"
+echo "EVIDENCE DONE" >> "$OUT/progress.log"

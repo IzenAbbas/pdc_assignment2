@@ -166,7 +166,862 @@ while (true) {
 //        done_cv_.wait(lock, [this] { return tasks_done_ == num_total_tasks_; });</pre>
 <p>All state is guarded by one mutex. After finishing a task, a worker keeps the lock to record the completion and claim its next task, so each task costs one lock round trip. The destructor sets <code>shutdown_</code> under the lock, calls <code>notify_all()</code> and joins. No thread busy-waits anywhere.</p>
 
-<!-- PARTS 1-8 FOLLOW -->
+<!-- ============================================================ 3 -->
+<h2>3. Part 1 — Synchronous parallel launch with Spawn</h2>
+<h3>3.1 Correctness and the added test</h3>
+<p>The added test is <code>exactly_once_stress</code> in <code>tests/tests.h</code>, registered in <code>tests/main.cpp</code>. It makes 20 rounds of back-to-back launches with task counts 0, 1, 2, 3, 5, 7, 8, 9, 15, 16, 17, 31, 33, 63, 64, 65, 127, 1000 and 4099. That covers very few tasks, many tasks, and counts that are not divisible by any power-of-two worker count. Each task busy-waits for a task-dependent 0–2 µs, so tasks finish out of order, then atomically increments a counter for its id. Right after <i>each</i> <code>run()</code> returns, every counter must be exactly 1. The test fails if any task ran twice (a duplicate claim), never ran, or had not finished when <code>run()</code> returned.</p>
+<p>It passes for all implementations at p = 1, 2, 3, 5, 8, 16 and 32, including 30 repeated runs. All supplied tests pass too (Appendix B), and ThreadSanitizer reports no races.</p>
+
+<h3>3.2 Predictions recorded before measuring</h3>
+<ul>
+  <li><b>Best scaling:</b> <code>recursive_fibonacci</code>. It is compute-bound with no memory traffic, has 256 identical tasks per launch (far more than p), and only 30 launches, so launch overhead is negligible. I expected S ≈ 7 at p = 8 and 10–30% more at p = 16 from SMT.</li>
+  <li><b>Worst scaling:</b> <code>super_super_light</code>. A task copies 512 ints (about 0.5 µs) and there are 400 launches, so creating and joining threads in every launch should cost more than the work. I expected Spawn to be slower than serial at every p.</li>
+  <li><b>Non-uniform workload</b> (<code>ping_pong_unequal</code>): dynamic assignment of 64 tasks should absorb the cost skew, and memory traffic should limit scaling at p = 4–8.</li>
+</ul>
+
+<h3>3.3 Measurements (Spawn)</h3>
+<p>The three chosen workloads are <code>super_super_light</code> (very small tasks), <code>recursive_fibonacci</code> (substantial work per task) and <code>ping_pong_unequal</code> (non-uniform task cost). Appendix A has every workload and implementation.</p>
+<table class="num"><thead><tr><th rowspan="2">Impl.</th><th colspan="3">p = 1</th><th colspan="3">p = 2</th><th colspan="3">p = 4</th><th colspan="3">p = 8</th><th colspan="3">p = 16</th></tr><tr><th>T<sub>p</sub> (ms)</th><th>S<sub>p</sub></th><th>E<sub>p</sub></th><th>T<sub>p</sub> (ms)</th><th>S<sub>p</sub></th><th>E<sub>p</sub></th><th>T<sub>p</sub> (ms)</th><th>S<sub>p</sub></th><th>E<sub>p</sub></th><th>T<sub>p</sub> (ms)</th><th>S<sub>p</sub></th><th>E<sub>p</sub></th><th>T<sub>p</sub> (ms)</th><th>S<sub>p</sub></th><th>E<sub>p</sub></th></tr></thead><tbody><tr class="grp"><td colspan="16"><code>super_super_light</code> &nbsp;·&nbsp; T<sub>1</sub> (Serial) = 12.3 ms</td></tr><tr><th class='impl'>Spawn</th><td>27.8</td><td>0.44</td><td>0.44</td><td>26.3</td><td>0.47</td><td>0.23</td><td>32.2</td><td>0.38</td><td>0.10</td><td>77.3</td><td>0.16</td><td>0.02</td><td>178.1</td><td>0.07</td><td>0.00</td></tr><tr class="grp"><td colspan="16"><code>recursive_fibonacci</code> &nbsp;·&nbsp; T<sub>1</sub> (Serial) = 1,604.6 ms</td></tr><tr><th class='impl'>Spawn</th><td>1,616.1</td><td>0.99</td><td>0.99</td><td>807.9</td><td>1.99</td><td>0.99</td><td>408.6</td><td>3.93</td><td>0.98</td><td>210.8</td><td>7.61</td><td>0.95</td><td>209.9</td><td>7.64</td><td>0.48</td></tr><tr class="grp"><td colspan="16"><code>ping_pong_unequal</code> &nbsp;·&nbsp; T<sub>1</sub> (Serial) = 3,330.9 ms</td></tr><tr><th class='impl'>Spawn</th><td>3,438.2</td><td>0.97</td><td>0.97</td><td>1,716.4</td><td>1.94</td><td>0.97</td><td>898.0</td><td>3.71</td><td>0.93</td><td>492.5</td><td>6.76</td><td>0.85</td><td>496.8</td><td>6.71</td><td>0.42</td></tr></tbody></table>
+
+<h3>3.4 Analysis</h3>
+<p><span class="lead">First worker count where adding workers gains less than 10%.</span></p>
+<ul>
+  <li><b><code>super_super_light</code>: p = 2.</b> Doubling to 2 gains only 5% (27.8 → 26.3 ms), and every further doubling makes it <i>slower</i>: 32.2, 77.3 and 178.1 ms. The extra time is almost exactly the cost of creating more threads. Spawn exceeds the spinning pool by 55 µs per launch at p = 4 and 161 µs at p = 8, i.e. about 14–20 µs per thread created and joined, while one launch contains only about 31 µs of work (12.3 ms / 400).</li>
+  <li><b><code>recursive_fibonacci</code>: p = 16.</b> From 1 to 8 every doubling gains 48–50% (S<sub>8</sub> = 7.61). From 8 to 16 it gains 0.4%. p = 16 adds no cores, only SMT siblings, and this recursive call/branch-heavy code already keeps a core's execution resources busy, so two threads per core just share them.</li>
+  <li><b><code>ping_pong_unequal</code>: p = 16.</b> It gains 45–50% per doubling up to 8 (S<sub>8</sub> = 6.76), then −0.9% from 8 to 16, for the same SMT reason. Each launch also streams the 2 MB input and output arrays through the shared L3, which the siblings share as well.</li>
+</ul>
+<p><span class="lead">Static vs dynamic assignment for the irregular workload.</span> In <code>ping_pong_unequal</code>, element i costs about 2·iters·(1 − i/N), so task t of 64 costs about 2(1 − (t+0.5)/64) times the average: task 0 about 2×, task 63 about 0.02×.</p>
+<ul>
+  <li><b>Load balance.</b> A static <i>contiguous</i> split gives worker 0 of 4 tasks 0–15, which is 44% of the work, so the makespan is 1.75× ideal (57% efficiency). A static <i>interleaved</i> split (t mod p) is much better: the worst worker gets 16.75/16 of its share, about 95% efficiency. Dynamic assignment is better still. Tasks are claimed in decreasing cost order, so the only imbalance is the final cheap tasks, and the work comes out nearly perfectly balanced.</li>
+  <li><b>Scheduling cost.</b> Static assignment needs no coordination: a worker computes its own ids. Dynamic assignment costs one atomic <code>fetch_add</code> per task, roughly 50–100 ns when the cache line moves between cores, so 64 × 100 ns ≈ 6 µs per launch. Each launch here does 2.2 ms of work at p = 4, so the cost is negligible.</li>
+</ul>
+<p>Dynamic assignment is therefore expected to balance this workload better at negligible cost. That matches the measurement: Spawn reaches E<sub>4</sub> = 0.93 and E<sub>8</sub> = 0.85 on <code>ping_pong_unequal</code>, the same as on <code>ping_pong_equal</code>. The Part 4 example measures the difference directly: the static split takes 20.15 ms and the dynamic one 11.13 ms (Section 6). Dynamic assignment loses only when tasks are so small that the per-task claim is comparable to the task itself (Section 6.3).</p>
+<p><span class="lead">A correct run with little or no speedup.</span> <code>super_super_light</code> under Spawn produces correct results but S<sub>p</sub> = 0.44, 0.47, 0.38, 0.16 and 0.07 for p = 1 to 16. At p = 16 it takes 178 ms against 12.3 ms serially. A launch holds about 31 µs of useful work but Spawn creates and joins up to 16 threads per launch at about 20 µs each, so the program spends more than 90% of its time on thread management. A second example is <code>spin_between_run_calls</code>, where S<sub>p</sub> stays at 1.99 for every p ≥ 2: the only heavy launch has 2 tasks, so at most 2 workers are ever useful.</p>
+
+
+<!-- ============================================================ 4 -->
+<h2>4. Part 2 — Persistent thread pool with spinning</h2>
+<table class="std"><thead><tr><th>Workload</th><th class="r">T<sub>1</sub> (ms)</th><th class="r">p</th><th class="r">Spawn (ms)</th><th class="r">Spin (ms)</th><th class="r">Sleep (ms)</th></tr></thead><tbody><tr><td><code>super_super_light</code></td><td class="r">12.3</td><td class='r'>4</td><td class="r">32.2</td><td class="r"><b>10.2</b></td><td class="r">13.6</td></tr><tr><td></td><td></td><td class='r'>8</td><td class="r">77.3</td><td class="r"><b>12.9</b></td><td class="r">17.7</td></tr><tr><td></td><td></td><td class='r'>16</td><td class="r">178.1</td><td class="r">259.7</td><td class="r"><b>24.0</b></td></tr><tr><td><code>super_light</code></td><td class="r">116.0</td><td class='r'>4</td><td class="r">57.4</td><td class="r"><b>33.5</b></td><td class="r">35.4</td></tr><tr><td></td><td></td><td class='r'>8</td><td class="r">83.7</td><td class="r"><b>21.9</b></td><td class="r">25.6</td></tr><tr><td></td><td></td><td class='r'>16</td><td class="r">175.1</td><td class="r">108.1</td><td class="r"><b>29.7</b></td></tr><tr><td><code>math_operations_in_tight_for_loop</code></td><td class="r">1,128.7</td><td class='r'>4</td><td class="r">433.5</td><td class="r"><b>322.2</b></td><td class="r">326.4</td></tr><tr><td></td><td></td><td class='r'>8</td><td class="r">472.8</td><td class="r"><b>246.9</b></td><td class="r">249.4</td></tr><tr><td></td><td></td><td class='r'>16</td><td class="r">935.8</td><td class="r">473.8</td><td class="r"><b>214.8</b></td></tr><tr><td><code>recursive_fibonacci</code></td><td class="r">1,604.6</td><td class='r'>4</td><td class="r">408.6</td><td class="r"><b>402.2</b></td><td class="r">405.3</td></tr><tr><td></td><td></td><td class='r'>8</td><td class="r"><b>210.8</b></td><td class="r">215.3</td><td class="r">216.7</td></tr><tr><td></td><td></td><td class='r'>16</td><td class="r">209.9</td><td class="r">259.7</td><td class="r"><b>205.4</b></td></tr><tr><td><code>mandelbrot_chunked</code></td><td class="r">753.5</td><td class='r'>4</td><td class="r">189.0</td><td class="r"><b>188.9</b></td><td class="r">189.0</td></tr><tr><td></td><td></td><td class='r'>8</td><td class="r"><b>94.9</b></td><td class="r">95.9</td><td class="r">95.6</td></tr><tr><td></td><td></td><td class='r'>16</td><td class="r">53.1</td><td class="r">59.9</td><td class="r"><b>51.7</b></td></tr></tbody></table>
+<p><span class="lead">Fine- vs coarse-grained workloads.</span> Replacing per-launch thread creation with a persistent pool helps exactly where launches are short.</p>
+<ul>
+  <li><b>Fine-grained.</b> At p = 8, <code>super_light</code> drops from 83.7 ms (Spawn) to 21.9 ms (Spin), 3.8× faster. <code>math_operations_in_tight_for_loop</code> drops from 472.8 to 246.9 ms (1.9×), and <code>super_super_light</code> at p = 4 from 32.2 to 10.2 ms.</li>
+  <li><b>Coarse-grained.</b> Nothing changes: <code>recursive_fibonacci</code> 210.8 vs 215.3 ms, <code>mandelbrot_chunked</code> 94.9 vs 95.9 ms.</li>
+</ul>
+<p>The reason is that thread creation is a fixed cost per launch, about 15–20 µs per thread. Compare it with the work in one launch:</p>
+<ul>
+  <li><code>recursive_fibonacci</code>: about 53 ms per launch (1605 ms / 30), so the overhead is under 0.5%.</li>
+  <li><code>mandelbrot_chunked</code>: a single launch.</li>
+  <li><code>super_light</code>: 0.29 ms per launch (116 ms / 400), so 8 thread creations (about 0.15 ms) are half the launch.</li>
+</ul>
+<p><span class="lead">Little or no work for some workers.</span> In <code>spin_between_run_calls</code>, the middle launch has 2 tasks, so p − 2 workers have nothing to do. Up to p = 8, Spin matches Sleep (about 280 ms). At p = 16, Spin takes <b>592.9 ms against 280.2 ms</b> for Sleep.</p>
+<p>The idle workers each execute the <code>has_work_</code> load-and-branch loop non-stop, and the calling thread spins on <code>tasks_done_</code>. At p = 16 that is 17 runnable threads on 16 hardware threads. The two workers computing fib(40) must share their cores with spinning SMT siblings and are time-sliced against the extra thread, so the useful work takes twice as long. The answers stay correct, but the spinners occupy hardware threads, take execution slots from their SMT siblings, keep the cores out of idle power states, and steal CPU from any other program.</p>
+<p>The same effect wrecks Spin on every many-launch workload at p = 16. <code>super_super_light</code> goes from 12.9 ms at p = 8 to 259.7 ms at p = 16, and <code>ping_pong_equal</code> from 269 to 475 ms. When a worker holding a task is descheduled, everyone waits for it.</p>
+<p><span class="lead">Faster than Spawn, yet efficiency still falls.</span> On <code>super_light</code>, Spin is faster than Spawn at every p ≤ 8, but its efficiency still falls: E = 0.95, 0.87, 0.66 at p = 2, 4, 8 (Spawn: 0.72, 0.50, 0.17). Both are true because the pool removes only one overhead term, thread creation. Each launch still pays costs that do not shrink with p:</p>
+<ul>
+  <li>publishing the launch and waiting for the slowest task (the barrier),</li>
+  <li>contention on the claim mutex, which grows with p,</li>
+  <li>a tail of 64 tasks spread over p workers.</li>
+</ul>
+<p>Meanwhile the useful work per worker shrinks as 1/p. An overhead that stays constant while the work divides makes T<sub>p</sub> fall more slowly than 1/p, so E<sub>p</sub> = T<sub>1</sub>/(p·T<sub>p</sub>) declines even though the pool beats Spawn at every p.</p>
+<p><span class="lead">Separating thread management from useful computation.</span> I take useful computation per worker as T<sub>1</sub>/p and overhead as O<sub>p</sub> = T<sub>p</sub> − T<sub>1</sub>/p. For <code>super_light</code> at p = 8:</p>
+<ul>
+  <li>Useful work: 14.5 ms.</li>
+  <li>Spawn overhead: 69.2 ms. Spin overhead: 7.4 ms.</li>
+  <li>The difference, 61.8 ms over 400 launches, is 155 µs per launch, i.e. about 19 µs to create and join each of the 8 threads. That is the thread-management cost.</li>
+  <li>The 7.4 ms Spin still pays (about 18 µs per launch) is synchronization, claiming and end-of-launch imbalance.</li>
+</ul>
+<p>The same calculation gives 72–76 µs per launch at p = 1–2 and 113–231 µs at p = 8–16 for <code>math_operations_in_tight_for_loop</code>. Limitations:</p>
+<ul>
+  <li>T<sub>1</sub>/p assumes the parallel work costs the same as the serial work. Cache effects break this: the reduction tree runs 1% <i>faster</i> than T<sub>1</sub> at p = 1, so O<sub>p</sub> is uncertain by about ±1% of T<sub>1</sub>.</li>
+  <li>End-to-end timings cannot separate synchronization from load imbalance.</li>
+  <li>Pool creation is outside the timed region, so the pool's own start-up cost is not included.</li>
+  <li>A minimum of 5 runs hides run-to-run variance.</li>
+  <li>The method fails at p = 16 for Spin, whose overhead is dominated by oversubscription; there the Spawn − Spin difference becomes negative.</li>
+</ul>
+
+
+<!-- ============================================================ 5 -->
+<h2>5. Part 3 — Sleeping thread pool and synchronization</h2>
+<h3>5.1 Synchronization reasoning</h3>
+<p><span class="lead">When a worker sleeps, and what wakes it.</span> A worker sleeps on <code>work_cv_</code> while <code>!shutdown_ &amp;&amp; next_task_ &gt;= num_total_tasks_</code>, i.e. while the current launch has no unclaimed task. Two events can make the condition true:</p>
+<ul>
+  <li><code>run()</code> publishes a new launch (<code>next_task_ = 0</code>, <code>num_total_tasks_ = n &gt; 0</code>).</li>
+  <li>The destructor sets <code>shutdown_</code>.</li>
+</ul>
+<p>Both happen while holding <code>mutex_</code>, and both are followed by <code>work_cv_.notify_all()</code>. Finishing a task can never make the condition true, so completions do not wake sleeping workers.</p>
+<p><span class="lead">What the calling thread waits for.</span> <code>run()</code> sleeps on <code>done_cv_</code> while <code>tasks_done_ != num_total_tasks_</code>. Whichever worker raises <code>tasks_done_</code> to <code>num_total_tasks_</code>, i.e. the last task to finish (not necessarily task n−1), calls <code>done_cv_.notify_one()</code>. For n = 0 the condition already holds and <code>run()</code> returns immediately.</p>
+<p><span class="lead">An incorrect interleaving.</span> Suppose completion were tracked at claim time, i.e. <code>run()</code> waited for <code>next_task_ == n</code> or a worker incremented <code>tasks_done_</code> before calling <code>runTask</code>:</p>
+<ol>
+  <li>Worker W1 claims the last task n−1 (<code>next_task_</code> becomes n) and releases the mutex.</li>
+  <li>The caller wakes, sees the launch “complete”, and returns from <code>run()</code>, even though task n−1 has not started.</li>
+  <li>The test checks its output (task n−1's elements are missing), or the program calls <code>run()</code> again, which resets the counters.</li>
+  <li>W1 now executes task n−1 of the old launch, after <code>run()</code> has already returned. Its results arrive too late. If it then updates the shared completion counter, that update counts toward the new launch, so the next <code>run()</code> can return one task early too.</li>
+</ol>
+<p>My implementation increments <code>tasks_done_</code> only after <code>runTask()</code> returns, and under the mutex. So <code>tasks_done_ == n</code> implies that every task has returned.</p>
+<p><span class="lead">Why the condition is checked in a loop.</span> <code>wait(lock, pred)</code> is <code>while (!pred()) wait(lock);</code>. The loop is required for four reasons:</p>
+<ol>
+  <li>Spurious wakeups are permitted.</li>
+  <li><code>notify_all()</code> wakes every sleeping worker, but a launch with fewer tasks than workers leaves most of them nothing to do. In <code>spin_between_run_calls</code>, 16 workers wake for a 1-task launch; 15 must re-check and go back to sleep.</li>
+  <li>Between the notify and re-acquiring the mutex, another thread may already have claimed the last task.</li>
+  <li>If the condition is already true, the thread must not wait at all. The predicate is checked under the mutex before sleeping, so a notification sent before the wait cannot be lost.</li>
+</ol>
+
+<h3>5.2 Spawn vs Spin vs Sleep (measured)</h3>
+<table class="std"><thead><tr><th>Workload</th><th class="r">T<sub>1</sub> (ms)</th><th class="r">p</th><th class="r">Spawn (ms)</th><th class="r">Spin (ms)</th><th class="r">Sleep (ms)</th></tr></thead><tbody><tr><td><code>super_super_light</code></td><td class="r">12.3</td><td class='r'>2</td><td class="r">26.3</td><td class="r"><b>10.3</b></td><td class="r">13.6</td></tr><tr><td></td><td></td><td class='r'>4</td><td class="r">32.2</td><td class="r"><b>10.2</b></td><td class="r">13.6</td></tr><tr><td></td><td></td><td class='r'>8</td><td class="r">77.3</td><td class="r"><b>12.9</b></td><td class="r">17.7</td></tr><tr><td></td><td></td><td class='r'>16</td><td class="r">178.1</td><td class="r">259.7</td><td class="r"><b>24.0</b></td></tr><tr><td><code>math_operations_in_tight_for_loop</code></td><td class="r">1,128.7</td><td class='r'>2</td><td class="r">731.8</td><td class="r"><b>586.8</b></td><td class="r">614.4</td></tr><tr><td></td><td></td><td class='r'>4</td><td class="r">433.5</td><td class="r"><b>322.2</b></td><td class="r">326.4</td></tr><tr><td></td><td></td><td class='r'>8</td><td class="r">472.8</td><td class="r"><b>246.9</b></td><td class="r">249.4</td></tr><tr><td></td><td></td><td class='r'>16</td><td class="r">935.8</td><td class="r">473.8</td><td class="r"><b>214.8</b></td></tr><tr><td><code>spin_between_run_calls</code></td><td class="r">559.3</td><td class='r'>2</td><td class="r">280.6</td><td class="r"><b>280.0</b></td><td class="r">280.4</td></tr><tr><td></td><td></td><td class='r'>4</td><td class="r">280.5</td><td class="r"><b>280.1</b></td><td class="r">280.5</td></tr><tr><td></td><td></td><td class='r'>8</td><td class="r">280.8</td><td class="r">280.5</td><td class="r"><b>280.4</b></td></tr><tr><td></td><td></td><td class='r'>16</td><td class="r">280.6</td><td class="r">592.9</td><td class="r"><b>280.2</b></td></tr></tbody></table>
+<p><span class="lead">Fine-grained workload.</span> On <code>super_super_light</code> with p = 2–8, Spin is fastest: 10.3, 10.2 and 12.9 ms, against Sleep's 13.6, 13.6 and 17.7 ms. Over 400 launches, Sleep's 3.3–4.8 ms extra is 8–12 µs per launch, the price of putting threads to sleep and waking them. Each launch has to wake every worker (a futex system call per thread, plus the time for the scheduler to run it), and when the last task finishes, the caller must also be woken. A spinning worker notices the new launch within about 100 ns. On <code>math_operations_in_tight_for_loop</code> (2000 launches of 16 tasks) the two are within 1–5% for p ≤ 8.</p>
+<p><span class="lead">Workload with idle gaps.</span> In <code>spin_between_run_calls</code>, most workers have nothing to do during the 2-task launch. At p = 16, Sleep (280.2 ms) is 2.1× faster than Spin (592.9 ms), because sleeping workers leave the cores to the two threads doing real work. The same holds whenever p reaches the hardware-thread count. At p = 16, Sleep beats Spin on every workload, for example <code>super_super_light</code> 24.0 vs 259.7 ms and <code>math_operations_in_tight_for_loop</code> 214.8 vs 473.8 ms.</p>
+<p><span class="lead">Why neither is fastest everywhere.</span> Spinning trades CPU time for reaction time: it wins when launches are short and back to back and every spinner has a hardware thread to itself. Sleeping trades a few microseconds of wake-up latency per launch for zero cost while idle: it wins when workers are idle for long stretches, when there are more runnable threads than hardware threads, and when SMT siblings need the core. Neither cost dominates in all cases, so the faster implementation depends on the workload.</p>
+
+
+<!-- ============================================================ 6 -->
+<h2>6. Part 4 — Scheduling and granularity</h2>
+<p><span class="lead">Added workload.</span> <code>IrregularTask</code> in <code>tests/tests.h</code> gives every item a known cost by busy-waiting on <code>steady_clock</code>. Items in the first half are cheap and items in the second half are expensive (the handout's 1,1,1,1,10,10,10,10 pattern). Each task processes <code>chunk</code> consecutive items, so a launch has ⌈N/chunk⌉ tasks, and every item must be processed exactly once. It runs through the existing task systems; no separate scheduler was written.</p>
+<ul>
+  <li><code>irregular_example_dynamic</code> / <code>irregular_example_static</code>: the handout's 8 items (1, 1, 1, 1, 10, 10, 10, 10 ms). Chunk 1 gives 8 tasks, claimed next-task. Chunk 2 gives 4 contiguous tasks, so with 4 workers each worker gets exactly one block: the static contiguous assignment.</li>
+  <li><code>irregular_chunk_{1,16,256,4096,65536}</code>: N = 2<sup>18</sup> fine-grained items costing 0.1 µs (first half) or 1 µs (second half), in chunks of 1 to 65536 (= N/4) items per task.</li>
+</ul>
+
+<h3>6.1 Static vs dynamic timelines (4 workers, handout pattern)</h3>
+<figure>
+  <img src="figures/part4_timelines.png" alt="Gantt charts for static and dynamic assignment">
+  <figcaption>Figure 6.1 — Timelines for the 1,1,1,1,10,10,10,10 ms tasks on 4 workers. Gaps between bars are only visual separators.</figcaption>
+</figure>
+<table class="std">
+  <thead><tr><th>Assignment</th><th>W0 busy</th><th>W1 busy</th><th>W2 busy</th><th>W3 busy</th><th class="r">Makespan</th><th class="r">Mean utilization</th></tr></thead>
+  <tbody>
+    <tr><td>Static contiguous: W<sub>i</sub> gets tasks 2i, 2i+1</td><td>T0+T1 = 2 ms (10%)</td><td>T2+T3 = 2 ms (10%)</td><td>T4+T5 = 20 ms (100%)</td><td>T6+T7 = 20 ms (100%)</td><td class="r">20 ms</td><td class="r">44 / (4×20) = 55%</td></tr>
+    <tr><td>Dynamic next-task</td><td>T0, T4 = 11 ms (100%)</td><td>T1, T5 = 11 ms (100%)</td><td>T2, T6 = 11 ms (100%)</td><td>T3, T7 = 11 ms (100%)</td><td class="r">11 ms</td><td class="r">44 / (4×11) = 100%</td></tr>
+  </tbody>
+</table>
+<p>Utilization = busy time ÷ makespan. Under static assignment, W0 and W1 finish their two 1 ms tasks at t = 2 ms and then sit idle for 18 ms, while W2 and W3 each run two 10 ms tasks back to back. With dynamic assignment, the four 1 ms tasks are claimed first. At t = 1 ms every worker claims one 10 ms task, and all finish at 11 ms. That equals total work ÷ p = 44/4, so it is optimal: 1.82× better than static.</p>
+
+<h3>6.2 Measured makespan</h3>
+<table class="std"><caption>Measured at p = 4 (ms, minimum of 5 runs).</caption><thead><tr><th>Test</th><th class="r">timeline</th><th class="r">Serial</th><th class="r">Spawn</th><th class="r">Spin</th><th class="r">Sleep</th></tr></thead><tbody><tr><td><code>irregular_example_static</code></td><td class="r">20</td><td class="r">44.00</td><td class="r">20.15</td><td class="r">20.01</td><td class="r">20.07</td></tr><tr><td><code>irregular_example_dynamic</code></td><td class="r">11</td><td class="r">44.00</td><td class="r">11.13</td><td class="r">11.01</td><td class="r">11.06</td></tr></tbody></table>
+<p>The measurements match the timelines within 0.15 ms for all three task systems: static 20.01–20.15 ms vs 20 ms, dynamic 11.01–11.13 ms vs 11 ms, serial 44.00 ms. Dynamic assignment is 1.8× faster with the same work.</p>
+
+<h3>6.3 Granularity experiment</h3>
+<p>The fine-grained workload has N = 2<sup>18</sup> items costing 0.1 µs or 1 µs. Its measured serial time is T<sub>1</sub> = 158.6 ms, so T ≈ 605 ns of useful work per item on average; the extra over the nominal 550 ns is the timer loop itself. The experiment uses five chunk sizes, from 1 item per task (262144 tasks) to 65536 items per task (4 tasks).</p>
+<table class="std"><caption>Irregular workload, N = 2<sup>18</sup> items, T<sub>1</sub> = 158.6 ms (ideal T<sub>1</sub>/4 = 39.6 ms, T<sub>1</sub>/16 = 9.91 ms). Times in ms.</caption><thead><tr><th class="r" rowspan="2">Chunk</th><th class="r" rowspan="2">Tasks</th><th colspan="3" style="text-align:center">p = 4</th><th colspan="3" style="text-align:center">p = 16</th></tr><tr><th class="r">Spawn</th><th class="r">Spin</th><th class="r">Sleep</th><th class="r">Spawn</th><th class="r">Spin</th><th class="r">Sleep</th></tr></thead><tbody><tr><td class="r">1</td><td class="r">262,144</td><td class="r">50.9</td><td class="r">90.0</td><td class="r">80.2</td><td class="r">20.9</td><td class="r">117.8</td><td class="r">97.2</td></tr><tr><td class="r">16</td><td class="r">16,384</td><td class="r">41.8</td><td class="r">42.8</td><td class="r">42.6</td><td class="r">15.9</td><td class="r">20.5</td><td class="r">15.1</td></tr><tr><td class="r">256</td><td class="r">1,024</td><td class="r">39.8</td><td class="r">39.9</td><td class="r">40.2</td><td class="r">14.5</td><td class="r">16.4</td><td class="r">12.7</td></tr><tr><td class="r">4096</td><td class="r">64</td><td class="r">39.6</td><td class="r">39.4</td><td class="r">39.7</td><td class="r">14.6</td><td class="r">14.6</td><td class="r">14.4</td></tr><tr><td class="r">65536</td><td class="r">4</td><td class="r">69.4</td><td class="r">69.3</td><td class="r">69.3</td><td class="r">69.5</td><td class="r">70.9</td><td class="r">69.5</td></tr></tbody></table>
+<figure>
+  <img src="figures/granularity.png" alt="Runtime vs chunk size for p = 4 and p = 16">
+  <figcaption>Figure 6.2 — Runtime vs chunk size (log scales). The dashed line is the ideal T<sub>1</sub>/p.</figcaption>
+</figure>
+<p><span class="lead">A chunk size that reduces scheduling overhead: 16, and beyond it 256.</span> At p = 4, chunk 1 costs 90.0 ms (Spin) and 80.2 ms (Sleep), more than twice the ideal 39.6 ms. Every item pays a mutex round trip. Chunk 16 divides the number of claims by 16 and brings both pools to 42.6–42.8 ms. Chunks 256 and 4096 reach 39.4–40.2 ms, within 1.5% of ideal.</p>
+<p><span class="lead">A chunk size that worsens load balance and reduces concurrency: 65536 = N/4.</span> There are now only 4 tasks. At p = 4, two tasks hold all the 1 µs items. Each takes about 69 ms, so the makespan is 69.3 ms: 1.75× the best chunk size, and exactly the static contiguous imbalance from Section 6.1, scaled up. At p = 16, the same 4 tasks leave 12 of the 16 workers with nothing to do, and the time stays at 69.5 ms against an ideal of 9.9 ms.</p>
+<p>At p = 16, even the best chunk (12.7 ms) is 1.3× the ideal. Two workers on one core slow each other's busy-wait loop, which itself performs work (reading the timer).</p>
+<p><span class="lead">Why very fine granularity destroys dynamic scheduling: H/T.</span> With c items per scheduled unit, a worker spends c·T on useful work and H on scheduling for each unit, so efficiency is at most cT/(cT + H) = 1/(1 + H/(cT)).</p>
+<p>From the chunk-1 and chunk-256 runs, I estimate H = (T<sub>p</sub>(1) − T<sub>p</sub>(256))·p/N:</p>
+<ul>
+  <li>Spawn (an atomic <code>fetch_add</code>): 169 ns at p = 4, 391 ns at p = 16.</li>
+  <li>Spin and Sleep (a mutex round trip): 764 and 609 ns at p = 4; 6.2 and 5.2 µs at p = 16.</li>
+</ul>
+<p>For the pools at p = 4, H/T ≈ 1.0–1.3, so at least half of every worker's time is scheduling. At p = 16, H/T ≈ 9. H grows with p because every claim goes through the same mutex: claims are serialized, so the pool cannot hand out more than about 3 million tasks per second (262144 claims in roughly 80–100 ms), no matter how many workers wait.</p>
+<p>Dynamic scheduling only pays off while H/T is small: its balance benefit is at most one unit's cost at the end of the launch, but its overhead is paid on every unit. Chunking divides the overhead per item by c (H/(16T) ≈ 0.08 at p = 4), and up to about 4096 items per task there are still enough tasks to balance the load. The cheaper atomic claim in Spawn keeps H/T at about 0.3 at p = 4, which is why Spawn is the fastest at chunk 1 (50.9 ms).</p>
+
+
+<!-- ============================================================ 7 -->
+<h2>7. Part 5 — Asynchronous task graphs with dependencies</h2>
+<h3>7.1 Implementation (<code>part5_async_deps/tasksys.cpp</code>, sleeping pool)</h3>
+<pre>struct Launch { IRunnable* runnable; int num_total_tasks, next_task, tasks_done, unmet_deps;
+                std::vector&lt;TaskID&gt; dependents; };            // launches waiting for this one
+std::unordered_map&lt;TaskID, Launch&gt; launches_;   // unfinished launches only
+std::deque&lt;TaskID&gt; ready_;                      // deps satisfied, tasks left to hand out
+// one mutex_ guards everything; work_cv_ wakes workers, done_cv_ wakes sync()</pre>
+<ul>
+  <li><b><code>runAsyncWithDeps</code></b>, all under the mutex. It gives the launch the next id (0, 1, 2, …, so ids are unique). For every dependency still in <code>launches_</code>, it appends the new id to that dependency's <code>dependents</code> and increments <code>unmet_deps</code>; a dependency that is no longer in the table has already finished. If <code>unmet_deps == 0</code>, the launch goes into <code>ready_</code> and <code>notify_all()</code> wakes the workers. It then returns without waiting.</li>
+  <li><b>Worker.</b> It sleeps until <code>ready_</code> is non-empty, then claims the next task of the launch at the front. When the last task of that launch has been <i>claimed</i>, the launch leaves <code>ready_</code>, so other workers move on to the next ready launch while its stragglers finish. Independent ready launches therefore run concurrently. After <code>runTask</code> returns, the worker relocks and increments <code>tasks_done</code>. If that was the last task, it calls <code>launchFinished(id)</code>.</li>
+  <li><b><code>launchFinished</code></b> removes the launch from the table and decrements <code>unmet_deps</code> of each dependent. Dependents that reach 0 enter <code>ready_</code> (with <code>notify_all</code>). If the table is now empty, it calls <code>done_cv_.notify_all()</code>.</li>
+  <li><b>The other methods.</b> <code>sync()</code> waits on <code>done_cv_</code> until the table is empty. <code>run(r, n)</code> is <code>runAsyncWithDeps(r, n, {})</code> followed by <code>sync()</code>, so it stays a correct synchronous launch. A launch with 0 tasks is finished as soon as it becomes ready. The destructor calls <code>sync()</code>, then stops and joins the workers.</li>
+</ul>
+
+<h3>7.2 Custom dependency test</h3>
+<p><code>abcd_dag_async</code> builds the handout graph with exact busy-wait task costs:</p>
+<ul>
+  <li>A: 128 tasks × 1 ms</li>
+  <li>B: 2 tasks × 8 ms, depends on A</li>
+  <li>C: 6 tasks × 4 ms, depends on A</li>
+  <li>D: 32 tasks × 2 ms, depends on B and C</li>
+</ul>
+<p>The first task of each launch to start checks that every dependency launch is complete, meaning its last task has already finished. Each launch counts its started and finished tasks, which must both equal its task count. All launches must be done after <code>sync()</code>.</p>
+<p><code>abcd_dag_split_async</code> is the same graph with B replaced by four independent sub-launches B1–B4, each of 2 tasks × 2 ms (the same 16 ms of work); D depends on B1–B4 and C. Because the task costs are exact, the measured times can be compared directly with the schedules below. The cost is wall-clock busy-waiting, so two workers sharing a core still each take exactly 1 ms per A task. Real computation would slow down on SMT siblings.</p>
+
+<h3>7.3 Dependency analysis</h3>
+<p><span class="lead">Ready sets and mandatory orderings.</span> At submission, only A is ready. When the last task of A finishes, <b>B and C become ready at the same instant</b> and may run concurrently: there is no edge between them, and their 8 tasks can share the workers. D becomes ready only when <i>both</i> B and C have finished. The mandatory orderings are A→B, A→C, B→D and C→D (so A→D); B and C are unordered.</p>
+<p><span class="lead">Total work.</span></p>
+<ul>
+  <li>W<sub>A</sub> = 128 × 1 = 128 ms</li>
+  <li>W<sub>B</sub> = 2 × 8 = 16 ms</li>
+  <li>W<sub>C</sub> = 6 × 4 = 24 ms</li>
+  <li>W<sub>D</sub> = 32 × 2 = 64 ms</li>
+  <li>W = 232 ms in total</li>
+</ul>
+<p><span class="lead">Critical-path lower bound.</span> Assumptions:</p>
+<ul>
+  <li>Unlimited workers.</li>
+  <li>Zero launch and scheduling overhead.</li>
+  <li>Every task costs exactly the stated average and runs on a single worker; tasks are not divisible.</li>
+  <li>Tasks within a launch are independent.</li>
+  <li>Dependencies are between whole launches: every task of a dependency must finish before any task of the dependent starts.</li>
+</ul>
+<p>Under these assumptions, a launch lasts at least as long as its longest task: A 1 ms, B 8 ms, C 4 ms, D 2 ms. The paths are A→B→D = 1 + 8 + 2 = 11 ms and A→C→D = 1 + 4 + 2 = 7 ms, so the <b>critical path is T<sub>∞</sub> = 11 ms</b> (through B). With p workers, T<sub>p</sub> ≥ max(T<sub>∞</sub>, W/p), giving <b>T<sub>2</sub> ≥ max(11, 116) = 116 ms</b> and <b>T<sub>4</sub> ≥ max(11, 58) = 58 ms</b>.</p>
+<p><span class="lead">Schedules for 2 and 4 workers.</span> Figure 7.1 is the greedy schedule my runtime follows: free workers claim the next task, and ready launches are served FIFO (B before C). Both schedules respect the dependencies, since B and C start only after the last A task and D only after the later of B and C. They also respect capacity: at most p tasks run at any time.</p>
+<ul>
+  <li><b>2 workers.</b> A takes 0–64 ms (64 tasks each). Then B0 and B1 run on 64–72, C0–C5 three per worker on 72–84, and D 16 tasks each on 84–116. Makespan <b>116 ms</b>, equal to the bound: utilization 100%.</li>
+  <li><b>4 workers.</b> A takes 0–32 ms. W0 and W1 run B0 and B1 on 32–40; W2 and W3 run C0–C3 on 32–40. W0 and W1 then run C4 and C5 on 40–44, while W2 and W3 sit idle for 4 ms because D cannot start before C ends. D runs on 44–60. Makespan <b>60 ms</b>, against the 58 ms bound: utilization 232/(4×60) = 97%. 58 ms cannot actually be reached: the B/C phase packs tasks of 8, 8, 4, 4, 4, 4, 4 and 4 ms onto 4 workers, and no packing finishes in under 12 ms (an 8 ms task cannot share a worker with a 4 ms one within 10 ms).</li>
+</ul>
+<figure>
+  <img src="figures/part5_schedules.png" alt="Schedules of the A, B, C, D graph on 2 and 4 workers">
+  <figcaption>Figure 7.1 — Valid schedules for the dependency graph with 2 and 4 workers. Repeated short tasks of A and D are drawn as one bar per worker.</figcaption>
+</figure>
+<p><span class="lead">Why doubling the workers does not halve the time.</span> The same greedy schedule gives 232, 116, 60, 32 and 20 ms for p = 1, 2, 4, 8 and 16, i.e. ×2.0, ×1.93, ×1.88 and ×1.6 per doubling. Three effects stop the halving:</p>
+<ol>
+  <li>The B/C phase has only 8 tasks, and two of them last 8 ms. Once p ≥ 8, that phase cannot shrink below 8 ms, whatever p is.</li>
+  <li>D waits for the <i>slowest</i> of B and C, so workers that finish early idle at the barrier, as W2 and W3 do at p = 4.</li>
+  <li>No schedule beats the 11 ms critical path; A is the only phase that keeps scaling.</li>
+</ol>
+<p>At p = 16, A takes 8 ms, B/C takes 8 ms and D takes 4 ms. The time is now dominated by B's 8 ms tasks, not by the amount of work.</p>
+<p><span class="lead">Bookkeeping when the final task of a launch finishes.</span> The worker relocks, raises <code>tasks_done</code> to <code>num_total_tasks</code>, and in <code>launchFinished</code>:</p>
+<ol>
+  <li>Removes the launch from the unfinished table. From now on it counts as satisfied for any future <code>runAsyncWithDeps</code>.</li>
+  <li>Walks its <code>dependents</code> list, decrementing each dependent's <code>unmet_deps</code>.</li>
+  <li>Moves every dependent whose count reaches 0 from blocked to ready (into <code>ready_</code>, with <code>notify_all</code>).</li>
+  <li>Wakes <code>sync()</code> if no unfinished launch remains.</li>
+</ol>
+<p>Only the <b>direct dependents</b> of the finishing launch can change state at that instant, and only those for which it was the last unfinished dependency. Nothing else is scanned. In this graph, A's completion makes both B and C ready. Whichever of B and C finishes first changes nothing (D still has one unmet dependency). The later one makes D ready.</p>
+<p><span class="lead">A race that could start a dependent early, and the invariant that prevents it.</span> Suppose a launch were treated as complete when its last task was <i>claimed</i> (<code>next_task == n</code>) rather than when it <i>finished</i>:</p>
+<ol>
+  <li>W1 claims B's last task.</li>
+  <li>The runtime marks B complete and releases D.</li>
+  <li>W2 starts D while B's last task is still running. <code>strict_diamond_deps_async</code> and my <code>abcd_dag_async</code> detect exactly this.</li>
+</ol>
+<p>A second variant is check-then-register without the lock. A new launch sees dependency X as unfinished. X then finishes and processes a <code>dependents</code> list that does not yet contain the new launch. The new launch then registers and waits forever.</p>
+<p>The invariant: <i>a launch is in <code>ready_</code>, or has any task handed out, only if every launch it depends on has <code>tasks_done == num_total_tasks</code>, i.e. all of its <code>runTask</code> calls have returned.</i> It holds because of three facts:</p>
+<ol>
+  <li><code>unmet_deps</code> counts exactly the dependencies that were unfinished at registration, and registration and completion are serialized by the same mutex.</li>
+  <li><code>unmet_deps</code> is decremented only by <code>launchFinished</code>, which runs after the last <code>runTask</code> has returned.</li>
+  <li>Workers take tasks only from <code>ready_</code>.</li>
+</ol>
+
+<h3>7.4 Measured results</h3>
+<table class="std"><caption>Custom dependency test on the sleeping pool (ms). "Schedule" is the greedy FIFO schedule computed by hand; "measured" is the minimum of 5 runs.</caption><thead><tr><th class="r" rowspan="2">p</th><th colspan="3" style="text-align:center"><code>abcd_dag_async</code></th><th colspan="3" style="text-align:center"><code>abcd_dag_split_async</code></th></tr><tr><th class="r">schedule</th><th class="r">measured</th><th class="r">diff.</th><th class="r">schedule</th><th class="r">measured</th><th class="r">diff.</th></tr></thead><tbody><tr><td class="r">1</td><td class="r">232</td><td class="r">232.2</td><td class="r">+0.2</td><td class="r">232</td><td class="r">232.1</td><td class="r">+0.1</td></tr><tr><td class="r">2</td><td class="r">116</td><td class="r">116.2</td><td class="r">+0.2</td><td class="r">116</td><td class="r">116.2</td><td class="r">+0.2</td></tr><tr><td class="r">4</td><td class="r">60</td><td class="r">60.1</td><td class="r">+0.1</td><td class="r">60</td><td class="r">60.2</td><td class="r">+0.2</td></tr><tr><td class="r">8</td><td class="r">32</td><td class="r">32.1</td><td class="r">+0.1</td><td class="r">30</td><td class="r">30.1</td><td class="r">+0.1</td></tr><tr><td class="r">16</td><td class="r">20</td><td class="r">23.1</td><td class="r">+3.1</td><td class="r">16</td><td class="r">18.7</td><td class="r">+2.7</td></tr></tbody></table>
+<p>With 2–8 workers, the measured makespans are within 0.2 ms of the hand-computed schedules: 116.2 ms at p = 2 against the bound of 116, 60.1 ms at p = 4, and 32.1 ms at p = 8. Doubling p from 2 to 4 gives 1.93×, not 2×, exactly as the barrier analysis predicts. At p = 16, every hardware thread runs a busy-waiting worker, so any operating-system activity preempts one of them. Both variants come out about 3 ms above the schedule there (23.1 vs 20 ms and 18.7 vs 16 ms).</p>
+<p><span class="lead">Splitting the long launch B into four independent sub-launches.</span> Splitting B into B1–B4 (2 tasks × 2 ms each) shortens the critical path from 11 ms (A→B→D) to 7 ms (A→C→D, with C now the longest), and adds 6 more tasks that can run at the same time.</p>
+<ul>
+  <li><b>p = 2 and p = 4: no gain.</b> Measured 116.2 vs 116.2 ms and 60.2 vs 60.1 ms. With 2 workers the time is set by the total work (232/2 = 116 ms), so extra parallelism cannot help. With 4 workers the ready queue is FIFO, so the eight 2 ms B tasks run first and C's 4 ms tasks form the tail (B tasks on 32–36 ms, C on 36–44 ms). The B/C phase still lasts 12 ms. Running the long tasks first would finish it in 10 ms (58 ms in total), so the benefit also depends on the scheduler's order.</li>
+  <li><b>p = 8 and p = 16: it helps.</b> 32.1 → 30.1 ms and 23.1 → 18.7 ms, because the B/C phase is no longer limited by B's 8 ms tasks.</li>
+</ul>
+<p>The extra launches are not free. Each one costs a hash-table entry, a dependency edge (D now has 5 dependencies instead of 2), a pass through <code>launchFinished</code> and a wake-up of the workers: roughly 10–40 µs each. <code>super_super_light_async</code> runs 400 launches of tiny tasks in about 17 ms, i.e. about 40 µs per launch including its 64 tasks. Against millisecond tasks this is negligible, but if B's tasks took a few microseconds, three extra launches would cost more than the parallelism saves. So extra concurrency helps only when there are idle workers to use it, when the scheduler orders the work well, and when task cost far exceeds launch cost.</p>
+<p><span class="lead">Independent launches run concurrently.</span> The table below submits the same bulk launches with <code>run()</code> (one launch at a time) and with <code>runAsyncWithDeps()</code> followed by a single <code>sync()</code>.</p>
+<table class="std"><caption>Sleeping pool of the Part 5 build: the same launches submitted with synchronous <code>run()</code> vs. asynchronous <code>runAsyncWithDeps()</code> + <code>sync()</code> (ms).</caption><thead><tr><th>Workload</th><th class="r">p</th><th class="r">run() each launch</th><th class="r">async + sync()</th><th class="r">gain</th></tr></thead><tbody><tr><td><code>math_operations_in_tight_for_loop_fewer_tasks</code></td><td class="r">1</td><td class="r">1,735.0</td><td class="r">1,133.0</td><td class="r">1.53×</td></tr><tr><td></td><td class="r">2</td><td class="r">699.9</td><td class="r">571.9</td><td class="r">1.22×</td></tr><tr><td></td><td class="r">4</td><td class="r">416.3</td><td class="r">280.2</td><td class="r">1.49×</td></tr><tr><td></td><td class="r">8</td><td class="r">297.2</td><td class="r">147.1</td><td class="r">2.02×</td></tr><tr><td></td><td class="r">16</td><td class="r">282.7</td><td class="r">121.6</td><td class="r">2.32×</td></tr><tr><td><code>math_operations_in_tight_for_loop_fan_in</code></td><td class="r">1</td><td class="r">594.2</td><td class="r">569.0</td><td class="r">1.04×</td></tr><tr><td></td><td class="r">2</td><td class="r">322.1</td><td class="r">311.5</td><td class="r">1.03×</td></tr><tr><td></td><td class="r">4</td><td class="r">165.6</td><td class="r">149.1</td><td class="r">1.11×</td></tr><tr><td></td><td class="r">8</td><td class="r">92.0</td><td class="r">90.9</td><td class="r">1.01×</td></tr><tr><td></td><td class="r">16</td><td class="r">78.0</td><td class="r">63.6</td><td class="r">1.23×</td></tr></tbody></table>
+<p><code>…_fewer_tasks</code> has only 9 tasks per launch. With <code>run()</code>, at most 9 of the 16 workers are busy and every launch ends at a barrier. Submitted asynchronously, the 2000 launches have no dependencies, so free workers take tasks from the next ready launch while the current one finishes: 282.7 → 121.6 ms at p = 16 (2.3×). <code>…_fan_in</code> gains 1.2× at p = 16. Its 256 math launches overlap, but the final reduce depends on all of them, so the critical path still ends with one serial task.</p>
+<p>At p = 1, the synchronous column pays two sleep/wake round trips per launch: the single worker and the waiting caller each sleep and are woken, and each of the 2000 launches incurs this. Most of the p = 1 difference comes from that.</p>
+
+
+<!-- ============================================================ 8 -->
+<h2 class="page-break">8. Combined performance analysis</h2>
+<figure>
+  <img src="figures/runtime.png" alt="Runtime vs workers">
+  <figcaption>Figure 8.1 — Runtime vs number of workers (log scale) for Spawn, Spin and Sleep. The dashed line is the serial T<sub>1</sub>.</figcaption>
+</figure>
+<figure>
+  <img src="figures/speedup.png" alt="Speedup vs workers">
+  <figcaption>Figure 8.2 — Speedup S<sub>p</sub> = T<sub>1</sub>/T<sub>p</sub>. The dashed line is ideal speedup; the solid line marks S = 1.</figcaption>
+</figure>
+<figure>
+  <img src="figures/efficiency.png" alt="Efficiency vs workers">
+  <figcaption>Figure 8.3 — Efficiency E<sub>p</sub> = S<sub>p</sub>/p for six workloads with different characteristics. The full numbers for all workloads are in Appendix A.</figcaption>
+</figure>
+
+<h3>8.1 Dominant limitation of each workload</h3>
+<table class="std">
+  <thead><tr><th>Workload</th><th>Dominant limitation</th><th>Evidence</th></tr></thead>
+  <tbody>
+    <tr><td><code>super_super_light</code></td><td>Thread-management overhead (Spawn); synchronization (pools)</td><td>About 31 µs of work per launch. Spawn: S<sub>16</sub> = 0.07, about 20 µs per thread created. Even Sleep peaks at S = 0.91: it waits 8–12 µs per launch for wake-ups.</td></tr>
+    <tr><td><code>super_light</code></td><td>Task granularity, plus per-launch overhead</td><td>0.29 ms of work per launch. Spawn S<sub>8</sub> = 1.39 vs Spin S<sub>8</sub> = 5.31; no implementation exceeds 5.3.</td></tr>
+    <tr><td><code>ping_pong_equal</code></td><td>Synchronization at the end of each launch, plus shared L3 traffic</td><td>Sleep S<sub>8</sub> = 7.0 but only 7.2 at 16. Spawn levels off at 5.4 (thread management).</td></tr>
+    <tr><td><code>ping_pong_unequal</code></td><td>Load imbalance at the end of each launch (mostly removed by dynamic claiming)</td><td>Efficiency matches the equal version (Sleep E<sub>8</sub> = 0.91), so the skew is absorbed.</td></tr>
+    <tr><td><code>recursive_fibonacci</code></td><td>None of the software limits up to 8; at 16, only SMT</td><td>S<sub>8</sub> = 7.4–7.6, S<sub>16</sub> = 7.6–7.8 (Spin 6.2, its own spinning).</td></tr>
+    <tr><td><code>math_operations_in_tight_for_loop</code></td><td>Task granularity and synchronization (16 small tasks per launch, 2000 launches)</td><td>Spawn S<sub>16</sub> = 1.21; Sleep S<sub>16</sub> = 5.25.</td></tr>
+    <tr><td><code>…_fewer_tasks</code></td><td>Insufficient concurrency (9 tasks per launch)</td><td>Sleep: 285.3 ms at p = 8, 277.5 ms at p = 16. Async submission reaches 121.6 ms.</td></tr>
+    <tr><td><code>…_fan_in</code> / <code>…_reduction_tree</code></td><td>Insufficient concurrency in the reduce phase (single-task launches)</td><td>Sleep S<sub>16</sub> = 7.5 / 8.3, half of ideal.</td></tr>
+    <tr><td><code>spin_between_run_calls</code></td><td>Insufficient concurrency (2 tasks); idle waiting for Spin</td><td>S stuck at 2.0 for every p ≥ 2; Spin S<sub>16</sub> = 0.94.</td></tr>
+    <tr><td><code>mandelbrot_chunked</code></td><td>No significant limit; it scales close to ideal</td><td>S<sub>8</sub> = 7.9, S<sub>16</sub> = 14.6 (Sleep). Interleaved rows balance the work.</td></tr>
+  </tbody>
+</table>
+
+<h3>8.2 Predictions: confirmed and contradicted</h3>
+<p><span class="verdict-ok">Confirmed.</span> <code>super_super_light</code> scaled worst: Spawn is slower than serial at every p (S = 0.07–0.47). Also as predicted:</p>
+<ul>
+  <li>The spinning pool beat Spawn most on many-launch workloads (3.8× on <code>super_light</code> at p = 8) and tied on <code>mandelbrot_chunked</code>.</li>
+  <li>Sleep was slower than Spin on <code>super_super_light</code> for p ≤ 8, and 2.1× faster on <code>spin_between_run_calls</code> at p = 16.</li>
+  <li>Part 4: static 20.07 ms vs dynamic 11.06 ms. Chunk 1 was the slowest dynamic setting for the pools (H/T ≈ 1.0–1.3), and chunk 65536 was 1.75× slower than the best chunk size.</li>
+  <li>Part 5: 116.2 / 60.1 / 32.1 ms. Splitting B helped only at p ≥ 8.</li>
+</ul>
+<p><span class="verdict-no">Contradicted.</span> I predicted <code>recursive_fibonacci</code> would scale best and gain 10–30% from SMT at p = 16. It gained nothing (7.61 → 7.64 for Spawn). <code>mandelbrot_chunked</code> scaled best: 7.94 at p = 8 and 14.2–14.6 at p = 16, i.e. SMT nearly doubled its speed.</p>
+<p>The difference is how fully one thread uses a core:</p>
+<ul>
+  <li><b>Mandelbrot.</b> The inner loop is a chain of dependent floating-point multiplies and adds. Each operation waits about 4 cycles for the previous result, so one thread leaves most of the core's issue slots empty, and an SMT sibling fills them almost for free.</li>
+  <li><b>fib(25).</b> It is call- and branch-heavy integer code with short dependencies, so one thread already keeps the core's front end and integer units busy. A sibling only splits the same resources.</li>
+</ul>
+<p>I had treated "compute-bound" as one category; SMT gains depend on how much idle capacity each core has. My ping_pong prediction was also too pessimistic. It reached S<sub>8</sub> ≈ 7, not saturation at 4–8, because the 4 MB of arrays fit in the 16 MB L3 and each worker's slice stays in its own core's cache.</p>
+
+<h3>8.3 When each design is appropriate</h3>
+<ul>
+  <li><b>Spawn</b> suits rare, coarse launches: a few launches of tens of milliseconds, as in <code>mandelbrot_chunked</code> and <code>recursive_fibonacci</code>, where it matched the pools within 1–3%. It also suits code that must not keep idle threads alive between calls, since it is the simplest design with no shutdown logic. Avoid it when launches are frequent or short: it pays about 15–20 µs per thread per launch (S<sub>16</sub> = 0.07 on <code>super_super_light</code>).</li>
+  <li><b>Spinning pool</b> suits frequent, short launches on a machine dedicated to the program, with p no larger than the number of cores, so every spinner has a core to itself. There it has the lowest launch latency (fastest on <code>super_super_light</code> and <code>super_light</code> at p ≤ 8). Avoid it when some workers often have no work, when p reaches the hardware-thread count (from p = 8 to p = 16 it got slower on 10 of the 11 workloads), and on shared or battery-powered machines.</li>
+  <li><b>Sleeping pool</b> is the general-purpose default. It is within a few percent of Spin when launches are back to back, by far the best at p = 16, robust to idle gaps and to running more threads than cores, and it is the design that extends naturally to asynchronous launches with dependencies (Part 5). Its cost is a wake-up latency of about 10 µs per launch, which matters only when a launch contains a few tens of microseconds of work.</li>
+</ul>
+
+
+<!-- ============================================================ APPENDIX A -->
+<section class="wide">
+<h2 class="page-break">Appendix A — T<sub>1</sub>, T<sub>p</sub>, S<sub>p</sub>, E<sub>p</sub> for every reported measurement</h2>
+<p class="small muted">Every time is the minimum of 5 runs. T<sub>1</sub> is the supplied serial implementation (minimum of its 25 runs). S<sub>p</sub> = T<sub>1</sub>/T<sub>p</sub>, E<sub>p</sub> = S<sub>p</sub>/p, and p is the number of worker threads. Part 4 and Part 5 measurements are in Sections 6 and 7.</p>
+<table class="num"><thead><tr><th rowspan="2">Impl.</th><th colspan="3">p = 1</th><th colspan="3">p = 2</th><th colspan="3">p = 4</th><th colspan="3">p = 8</th><th colspan="3">p = 16</th></tr><tr><th>T<sub>p</sub> (ms)</th><th>S<sub>p</sub></th><th>E<sub>p</sub></th><th>T<sub>p</sub> (ms)</th><th>S<sub>p</sub></th><th>E<sub>p</sub></th><th>T<sub>p</sub> (ms)</th><th>S<sub>p</sub></th><th>E<sub>p</sub></th><th>T<sub>p</sub> (ms)</th><th>S<sub>p</sub></th><th>E<sub>p</sub></th><th>T<sub>p</sub> (ms)</th><th>S<sub>p</sub></th><th>E<sub>p</sub></th></tr></thead><tbody><tr class="grp"><td colspan="16"><code>super_super_light</code> &nbsp;·&nbsp; T<sub>1</sub> (Serial) = 12.3 ms</td></tr><tr><th class='impl'>Spawn</th><td>27.8</td><td>0.44</td><td>0.44</td><td>26.3</td><td>0.47</td><td>0.23</td><td>32.2</td><td>0.38</td><td>0.10</td><td>77.3</td><td>0.16</td><td>0.02</td><td>178.1</td><td>0.07</td><td>0.00</td></tr><tr><th class='impl'>Spin</th><td>17.4</td><td>0.71</td><td>0.71</td><td>10.3</td><td>1.20</td><td>0.60</td><td>10.2</td><td>1.21</td><td>0.30</td><td>12.9</td><td>0.95</td><td>0.12</td><td>259.7</td><td>0.05</td><td>0.00</td></tr><tr><th class='impl'>Sleep</th><td>17.2</td><td>0.72</td><td>0.72</td><td>13.6</td><td>0.91</td><td>0.45</td><td>13.6</td><td>0.91</td><td>0.23</td><td>17.7</td><td>0.70</td><td>0.09</td><td>24.0</td><td>0.51</td><td>0.03</td></tr><tr class="grp"><td colspan="16"><code>super_light</code> &nbsp;·&nbsp; T<sub>1</sub> (Serial) = 116.0 ms</td></tr><tr><th class='impl'>Spawn</th><td>145.6</td><td>0.80</td><td>0.80</td><td>80.8</td><td>1.44</td><td>0.72</td><td>57.4</td><td>2.02</td><td>0.51</td><td>83.7</td><td>1.39</td><td>0.17</td><td>175.1</td><td>0.66</td><td>0.04</td></tr><tr><th class='impl'>Spin</th><td>118.9</td><td>0.98</td><td>0.98</td><td>61.3</td><td>1.89</td><td>0.95</td><td>33.5</td><td>3.47</td><td>0.87</td><td>21.9</td><td>5.31</td><td>0.66</td><td>108.1</td><td>1.07</td><td>0.07</td></tr><tr><th class='impl'>Sleep</th><td>123.5</td><td>0.94</td><td>0.94</td><td>66.4</td><td>1.75</td><td>0.87</td><td>35.4</td><td>3.28</td><td>0.82</td><td>25.6</td><td>4.54</td><td>0.57</td><td>29.7</td><td>3.90</td><td>0.24</td></tr><tr class="grp"><td colspan="16"><code>ping_pong_equal</code> &nbsp;·&nbsp; T<sub>1</sub> (Serial) = 1,849.8 ms</td></tr><tr><th class='impl'>Spawn</th><td>1,919.3</td><td>0.96</td><td>0.96</td><td>994.7</td><td>1.86</td><td>0.93</td><td>528.2</td><td>3.50</td><td>0.88</td><td>348.0</td><td>5.32</td><td>0.66</td><td>342.0</td><td>5.41</td><td>0.34</td></tr><tr><th class='impl'>Spin</th><td>1,887.7</td><td>0.98</td><td>0.98</td><td>939.1</td><td>1.97</td><td>0.98</td><td>479.7</td><td>3.86</td><td>0.96</td><td>269.4</td><td>6.87</td><td>0.86</td><td>475.1</td><td>3.89</td><td>0.24</td></tr><tr><th class='impl'>Sleep</th><td>1,896.1</td><td>0.98</td><td>0.98</td><td>960.8</td><td>1.93</td><td>0.96</td><td>506.2</td><td>3.65</td><td>0.91</td><td>263.7</td><td>7.01</td><td>0.88</td><td>256.8</td><td>7.20</td><td>0.45</td></tr><tr class="grp"><td colspan="16"><code>ping_pong_unequal</code> &nbsp;·&nbsp; T<sub>1</sub> (Serial) = 3,330.9 ms</td></tr><tr><th class='impl'>Spawn</th><td>3,438.2</td><td>0.97</td><td>0.97</td><td>1,716.4</td><td>1.94</td><td>0.97</td><td>898.0</td><td>3.71</td><td>0.93</td><td>492.5</td><td>6.76</td><td>0.85</td><td>496.8</td><td>6.71</td><td>0.42</td></tr><tr><th class='impl'>Spin</th><td>3,348.8</td><td>0.99</td><td>0.99</td><td>1,682.3</td><td>1.98</td><td>0.99</td><td>841.3</td><td>3.96</td><td>0.99</td><td>464.2</td><td>7.18</td><td>0.90</td><td>803.4</td><td>4.15</td><td>0.26</td></tr><tr><th class='impl'>Sleep</th><td>3,343.1</td><td>1.00</td><td>1.00</td><td>1,699.5</td><td>1.96</td><td>0.98</td><td>863.9</td><td>3.86</td><td>0.96</td><td>456.5</td><td>7.30</td><td>0.91</td><td>409.4</td><td>8.14</td><td>0.51</td></tr><tr class="grp"><td colspan="16"><code>recursive_fibonacci</code> &nbsp;·&nbsp; T<sub>1</sub> (Serial) = 1,604.6 ms</td></tr><tr><th class='impl'>Spawn</th><td>1,616.1</td><td>0.99</td><td>0.99</td><td>807.9</td><td>1.99</td><td>0.99</td><td>408.6</td><td>3.93</td><td>0.98</td><td>210.8</td><td>7.61</td><td>0.95</td><td>209.9</td><td>7.64</td><td>0.48</td></tr><tr><th class='impl'>Spin</th><td>1,610.0</td><td>1.00</td><td>1.00</td><td>803.1</td><td>2.00</td><td>1.00</td><td>402.2</td><td>3.99</td><td>1.00</td><td>215.3</td><td>7.45</td><td>0.93</td><td>259.7</td><td>6.18</td><td>0.39</td></tr><tr><th class='impl'>Sleep</th><td>1,611.4</td><td>1.00</td><td>1.00</td><td>808.8</td><td>1.98</td><td>0.99</td><td>405.3</td><td>3.96</td><td>0.99</td><td>216.7</td><td>7.40</td><td>0.93</td><td>205.4</td><td>7.81</td><td>0.49</td></tr><tr class="grp"><td colspan="16"><code>math_operations_in_tight_for_loop</code> &nbsp;·&nbsp; T<sub>1</sub> (Serial) = 1,128.7 ms</td></tr><tr><th class='impl'>Spawn</th><td>1,286.0</td><td>0.88</td><td>0.88</td><td>731.8</td><td>1.54</td><td>0.77</td><td>433.5</td><td>2.60</td><td>0.65</td><td>472.8</td><td>2.39</td><td>0.30</td><td>935.8</td><td>1.21</td><td>0.08</td></tr><tr><th class='impl'>Spin</th><td>1,133.2</td><td>1.00</td><td>1.00</td><td>586.8</td><td>1.92</td><td>0.96</td><td>322.2</td><td>3.50</td><td>0.88</td><td>246.9</td><td>4.57</td><td>0.57</td><td>473.8</td><td>2.38</td><td>0.15</td></tr><tr><th class='impl'>Sleep</th><td>1,205.5</td><td>0.94</td><td>0.94</td><td>614.4</td><td>1.84</td><td>0.92</td><td>326.4</td><td>3.46</td><td>0.86</td><td>249.4</td><td>4.53</td><td>0.57</td><td>214.8</td><td>5.25</td><td>0.33</td></tr><tr class="grp"><td colspan="16"><code>math_operations_in_tight_for_loop_fewer_tasks</code> &nbsp;·&nbsp; T<sub>1</sub> (Serial) = 1,127.9 ms</td></tr><tr><th class='impl'>Spawn</th><td>1,310.3</td><td>0.86</td><td>0.86</td><td>732.9</td><td>1.54</td><td>0.77</td><td>456.5</td><td>2.47</td><td>0.62</td><td>468.7</td><td>2.41</td><td>0.30</td><td>482.5</td><td>2.34</td><td>0.15</td></tr><tr><th class='impl'>Spin</th><td>1,132.5</td><td>1.00</td><td>1.00</td><td>642.1</td><td>1.76</td><td>0.88</td><td>392.3</td><td>2.88</td><td>0.72</td><td>274.4</td><td>4.11</td><td>0.51</td><td>364.4</td><td>3.10</td><td>0.19</td></tr><tr><th class='impl'>Sleep</th><td>1,208.5</td><td>0.93</td><td>0.93</td><td>656.8</td><td>1.72</td><td>0.86</td><td>404.7</td><td>2.79</td><td>0.70</td><td>285.3</td><td>3.95</td><td>0.49</td><td>277.5</td><td>4.06</td><td>0.25</td></tr><tr class="grp"><td colspan="16"><code>math_operations_in_tight_for_loop_fan_in</code> &nbsp;·&nbsp; T<sub>1</sub> (Serial) = 578.9 ms</td></tr><tr><th class='impl'>Spawn</th><td>605.3</td><td>0.96</td><td>0.96</td><td>342.7</td><td>1.69</td><td>0.84</td><td>171.4</td><td>3.38</td><td>0.84</td><td>116.5</td><td>4.97</td><td>0.62</td><td>134.6</td><td>4.30</td><td>0.27</td></tr><tr><th class='impl'>Spin</th><td>579.0</td><td>1.00</td><td>1.00</td><td>304.5</td><td>1.90</td><td>0.95</td><td>155.5</td><td>3.72</td><td>0.93</td><td>90.6</td><td>6.39</td><td>0.80</td><td>158.1</td><td>3.66</td><td>0.23</td></tr><tr><th class='impl'>Sleep</th><td>584.8</td><td>0.99</td><td>0.99</td><td>317.3</td><td>1.82</td><td>0.91</td><td>167.8</td><td>3.45</td><td>0.86</td><td>101.2</td><td>5.72</td><td>0.71</td><td>77.3</td><td>7.49</td><td>0.47</td></tr><tr class="grp"><td colspan="16"><code>math_operations_in_tight_for_loop_reduction_tree</code> &nbsp;·&nbsp; T<sub>1</sub> (Serial) = 577.4 ms</td></tr><tr><th class='impl'>Spawn</th><td>570.9</td><td>1.01</td><td>1.01</td><td>291.7</td><td>1.98</td><td>0.99</td><td>151.7</td><td>3.81</td><td>0.95</td><td>83.7</td><td>6.90</td><td>0.86</td><td>77.2</td><td>7.48</td><td>0.47</td></tr><tr><th class='impl'>Spin</th><td>570.4</td><td>1.01</td><td>1.01</td><td>290.1</td><td>1.99</td><td>1.00</td><td>146.2</td><td>3.95</td><td>0.99</td><td>99.2</td><td>5.82</td><td>0.73</td><td>105.5</td><td>5.48</td><td>0.34</td></tr><tr><th class='impl'>Sleep</th><td>573.2</td><td>1.01</td><td>1.01</td><td>291.2</td><td>1.98</td><td>0.99</td><td>149.2</td><td>3.87</td><td>0.97</td><td>88.9</td><td>6.49</td><td>0.81</td><td>69.7</td><td>8.29</td><td>0.52</td></tr><tr class="grp"><td colspan="16"><code>spin_between_run_calls</code> &nbsp;·&nbsp; T<sub>1</sub> (Serial) = 559.3 ms</td></tr><tr><th class='impl'>Spawn</th><td>560.4</td><td>1.00</td><td>1.00</td><td>280.6</td><td>1.99</td><td>1.00</td><td>280.5</td><td>1.99</td><td>0.50</td><td>280.8</td><td>1.99</td><td>0.25</td><td>280.6</td><td>1.99</td><td>0.12</td></tr><tr><th class='impl'>Spin</th><td>559.8</td><td>1.00</td><td>1.00</td><td>280.0</td><td>2.00</td><td>1.00</td><td>280.1</td><td>2.00</td><td>0.50</td><td>280.5</td><td>1.99</td><td>0.25</td><td>592.9</td><td>0.94</td><td>0.06</td></tr><tr><th class='impl'>Sleep</th><td>559.8</td><td>1.00</td><td>1.00</td><td>280.4</td><td>1.99</td><td>1.00</td><td>280.5</td><td>1.99</td><td>0.50</td><td>280.4</td><td>1.99</td><td>0.25</td><td>280.2</td><td>2.00</td><td>0.12</td></tr><tr class="grp"><td colspan="16"><code>mandelbrot_chunked</code> &nbsp;·&nbsp; T<sub>1</sub> (Serial) = 753.5 ms</td></tr><tr><th class='impl'>Spawn</th><td>756.4</td><td>1.00</td><td>1.00</td><td>377.4</td><td>2.00</td><td>1.00</td><td>189.0</td><td>3.99</td><td>1.00</td><td>94.9</td><td>7.94</td><td>0.99</td><td>53.1</td><td>14.19</td><td>0.89</td></tr><tr><th class='impl'>Spin</th><td>756.5</td><td>1.00</td><td>1.00</td><td>377.1</td><td>2.00</td><td>1.00</td><td>188.9</td><td>3.99</td><td>1.00</td><td>95.9</td><td>7.86</td><td>0.98</td><td>59.9</td><td>12.58</td><td>0.79</td></tr><tr><th class='impl'>Sleep</th><td>755.9</td><td>1.00</td><td>1.00</td><td>377.4</td><td>2.00</td><td>1.00</td><td>189.0</td><td>3.99</td><td>1.00</td><td>95.6</td><td>7.88</td><td>0.99</td><td>51.7</td><td>14.57</td><td>0.91</td></tr></tbody></table>
+</section>
+
+<!-- ============================================================ APPENDIX B -->
+<h2 class="page-break">Appendix B — Correctness evidence</h2>
+<p>Below is the unedited output of every supplied test and of my own tests. <code>tests/main.cpp</code> checks each result and stops with <code>ERROR: Results did not pass correctness check!</code> on the first failure, so every printed timing line is a passing run. In the Part 5 build, only <code>Parallel + Thread Pool + Sleep</code> is my implementation; the other three are the provided serial stubs, which the handout says need not be implemented there.</p>
+<p>Additional checks, all passed:</p>
+<ol>
+  <li>Every test of both builds was run with p = 1, 3, 16 and 32 (32 is twice the hardware threads).</li>
+  <li><code>exactly_once_stress</code>, <code>strict_diamond_deps_async</code> and <code>strict_graph_deps_large_async</code> were each repeated 30 times at p = 2, 5, 8 and 16.</li>
+  <li>Both builds were compiled with ThreadSanitizer (<code>-fsanitize=thread</code>, outside the Makefile) and run at p = 3 and 8 on the simple, super-light, exactly-once, irregular, diamond, medium-graph and ABCD tests. It reported no data race.</li>
+</ol>
+<h3>B.1 <code>part1to4_synchronous</code> — <code>./runtasks -n 8 -i 3 &lt;test&gt;</code></h3>
+<pre class='log'>===================================================================================
+Test name: simple_test_sync
+===================================================================================
+[Serial]:		[0.000] ms
+[Parallel + Always Spawn]:		[0.118] ms
+[Parallel + Thread Pool + Spin]:		[0.009] ms
+[Parallel + Thread Pool + Sleep]:		[0.034] ms
+===================================================================================
+===================================================================================
+Test name: super_super_light
+===================================================================================
+[Serial]:		[12.765] ms
+[Parallel + Always Spawn]:		[81.237] ms
+[Parallel + Thread Pool + Spin]:		[11.945] ms
+[Parallel + Thread Pool + Sleep]:		[17.590] ms
+===================================================================================
+===================================================================================
+Test name: super_light
+===================================================================================
+[Serial]:		[115.829] ms
+[Parallel + Always Spawn]:		[87.097] ms
+[Parallel + Thread Pool + Spin]:		[23.200] ms
+[Parallel + Thread Pool + Sleep]:		[26.136] ms
+===================================================================================
+===================================================================================
+Test name: ping_pong_equal
+===================================================================================
+[Serial]:		[1868.220] ms
+[Parallel + Always Spawn]:		[340.337] ms
+[Parallel + Thread Pool + Spin]:		[281.399] ms
+[Parallel + Thread Pool + Sleep]:		[300.322] ms
+===================================================================================
+===================================================================================
+Test name: ping_pong_unequal
+===================================================================================
+[Serial]:		[3326.583] ms
+[Parallel + Always Spawn]:		[489.682] ms
+[Parallel + Thread Pool + Spin]:		[483.671] ms
+[Parallel + Thread Pool + Sleep]:		[466.614] ms
+===================================================================================
+===================================================================================
+Test name: recursive_fibonacci
+===================================================================================
+[Serial]:		[1610.918] ms
+[Parallel + Always Spawn]:		[213.993] ms
+[Parallel + Thread Pool + Spin]:		[268.394] ms
+[Parallel + Thread Pool + Sleep]:		[222.965] ms
+===================================================================================
+===================================================================================
+Test name: math_operations_in_tight_for_loop
+===================================================================================
+[Serial]:		[1137.765] ms
+[Parallel + Always Spawn]:		[486.354] ms
+[Parallel + Thread Pool + Spin]:		[244.969] ms
+[Parallel + Thread Pool + Sleep]:		[271.269] ms
+===================================================================================
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fewer_tasks
+===================================================================================
+[Serial]:		[1145.200] ms
+[Parallel + Always Spawn]:		[491.051] ms
+[Parallel + Thread Pool + Spin]:		[279.580] ms
+[Parallel + Thread Pool + Sleep]:		[287.349] ms
+===================================================================================
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fan_in
+===================================================================================
+[Serial]:		[583.251] ms
+[Parallel + Always Spawn]:		[117.461] ms
+[Parallel + Thread Pool + Spin]:		[92.871] ms
+[Parallel + Thread Pool + Sleep]:		[87.616] ms
+===================================================================================
+===================================================================================
+Test name: math_operations_in_tight_for_loop_reduction_tree
+===================================================================================
+[Serial]:		[591.435] ms
+[Parallel + Always Spawn]:		[83.553] ms
+[Parallel + Thread Pool + Spin]:		[87.708] ms
+[Parallel + Thread Pool + Sleep]:		[86.988] ms
+===================================================================================
+===================================================================================
+Test name: spin_between_run_calls
+===================================================================================
+[Serial]:		[560.999] ms
+[Parallel + Always Spawn]:		[281.147] ms
+[Parallel + Thread Pool + Spin]:		[281.035] ms
+[Parallel + Thread Pool + Sleep]:		[284.807] ms
+===================================================================================
+===================================================================================
+Test name: mandelbrot_chunked
+===================================================================================
+[Serial]:		[754.248] ms
+[Parallel + Always Spawn]:		[94.775] ms
+[Parallel + Thread Pool + Spin]:		[95.550] ms
+[Parallel + Thread Pool + Sleep]:		[99.360] ms
+===================================================================================
+===================================================================================
+Test name: exactly_once_stress
+===================================================================================
+[Serial]:		[119.758] ms
+[Parallel + Always Spawn]:		[76.095] ms
+[Parallel + Thread Pool + Spin]:		[51.306] ms
+[Parallel + Thread Pool + Sleep]:		[50.250] ms
+===================================================================================
+===================================================================================
+Test name: irregular_example_dynamic
+===================================================================================
+[Serial]:		[44.001] ms
+[Parallel + Always Spawn]:		[10.240] ms
+[Parallel + Thread Pool + Spin]:		[10.011] ms
+[Parallel + Thread Pool + Sleep]:		[10.070] ms
+===================================================================================
+===================================================================================
+Test name: irregular_example_static
+===================================================================================
+[Serial]:		[44.001] ms
+[Parallel + Always Spawn]:		[20.158] ms
+[Parallel + Thread Pool + Spin]:		[20.006] ms
+[Parallel + Thread Pool + Sleep]:		[20.067] ms
+===================================================================================
+===================================================================================
+Test name: irregular_chunk_1
+===================================================================================
+[Serial]:		[158.406] ms
+[Parallel + Always Spawn]:		[29.029] ms
+[Parallel + Thread Pool + Spin]:		[107.743] ms
+[Parallel + Thread Pool + Sleep]:		[91.954] ms
+===================================================================================
+===================================================================================
+Test name: irregular_chunk_16
+===================================================================================
+[Serial]:		[157.388] ms
+[Parallel + Always Spawn]:		[21.535] ms
+[Parallel + Thread Pool + Spin]:		[21.020] ms
+[Parallel + Thread Pool + Sleep]:		[21.273] ms
+===================================================================================
+===================================================================================
+Test name: irregular_chunk_256
+===================================================================================
+[Serial]:		[157.325] ms
+[Parallel + Always Spawn]:		[19.884] ms
+[Parallel + Thread Pool + Spin]:		[19.994] ms
+[Parallel + Thread Pool + Sleep]:		[20.037] ms
+===================================================================================
+===================================================================================
+Test name: irregular_chunk_4096
+===================================================================================
+[Serial]:		[157.342] ms
+[Parallel + Always Spawn]:		[19.936] ms
+[Parallel + Thread Pool + Spin]:		[20.117] ms
+[Parallel + Thread Pool + Sleep]:		[19.988] ms
+===================================================================================
+===================================================================================
+Test name: irregular_chunk_65536
+===================================================================================
+[Serial]:		[157.325] ms
+[Parallel + Always Spawn]:		[69.323] ms
+[Parallel + Thread Pool + Spin]:		[69.235] ms
+[Parallel + Thread Pool + Sleep]:		[69.289] ms
+===================================================================================</pre>
+<h3>B.2 <code>part5_async_deps</code> — <code>./runtasks -n 8 -i 3 &lt;test&gt;</code></h3>
+<pre class='log'>===================================================================================
+Test name: simple_test_async
+===================================================================================
+[Serial]:		[0.000] ms
+[Parallel + Always Spawn]:		[0.000] ms
+[Parallel + Thread Pool + Spin]:		[0.000] ms
+[Parallel + Thread Pool + Sleep]:		[0.028] ms
+===================================================================================
+===================================================================================
+Test name: ping_pong_equal_async
+===================================================================================
+[Serial]:		[1845.722] ms
+[Parallel + Always Spawn]:		[1849.258] ms
+[Parallel + Thread Pool + Spin]:		[1847.210] ms
+[Parallel + Thread Pool + Sleep]:		[258.168] ms
+===================================================================================
+===================================================================================
+Test name: ping_pong_unequal_async
+===================================================================================
+[Serial]:		[3330.400] ms
+[Parallel + Always Spawn]:		[3320.480] ms
+[Parallel + Thread Pool + Spin]:		[3349.242] ms
+[Parallel + Thread Pool + Sleep]:		[439.933] ms
+===================================================================================
+===================================================================================
+Test name: super_light_async
+===================================================================================
+[Serial]:		[115.465] ms
+[Parallel + Always Spawn]:		[115.479] ms
+[Parallel + Thread Pool + Spin]:		[115.383] ms
+[Parallel + Thread Pool + Sleep]:		[22.746] ms
+===================================================================================
+===================================================================================
+Test name: super_super_light_async
+===================================================================================
+[Serial]:		[12.220] ms
+[Parallel + Always Spawn]:		[12.350] ms
+[Parallel + Thread Pool + Spin]:		[12.346] ms
+[Parallel + Thread Pool + Sleep]:		[16.279] ms
+===================================================================================
+===================================================================================
+Test name: recursive_fibonacci_async
+===================================================================================
+[Serial]:		[1609.031] ms
+[Parallel + Always Spawn]:		[1608.192] ms
+[Parallel + Thread Pool + Spin]:		[1607.111] ms
+[Parallel + Thread Pool + Sleep]:		[202.022] ms
+===================================================================================
+===================================================================================
+Test name: math_operations_in_tight_for_loop_async
+===================================================================================
+[Serial]:		[1134.924] ms
+[Parallel + Always Spawn]:		[1133.521] ms
+[Parallel + Thread Pool + Spin]:		[1136.828] ms
+[Parallel + Thread Pool + Sleep]:		[184.896] ms
+===================================================================================
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fewer_tasks_async
+===================================================================================
+[Serial]:		[1129.434] ms
+[Parallel + Always Spawn]:		[1128.021] ms
+[Parallel + Thread Pool + Spin]:		[1132.641] ms
+[Parallel + Thread Pool + Sleep]:		[146.663] ms
+===================================================================================
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fan_in_async
+===================================================================================
+[Serial]:		[580.105] ms
+[Parallel + Always Spawn]:		[578.583] ms
+[Parallel + Thread Pool + Spin]:		[578.553] ms
+[Parallel + Thread Pool + Sleep]:		[75.301] ms
+===================================================================================
+===================================================================================
+Test name: math_operations_in_tight_for_loop_reduction_tree_async
+===================================================================================
+[Serial]:		[577.159] ms
+[Parallel + Always Spawn]:		[577.467] ms
+[Parallel + Thread Pool + Spin]:		[577.375] ms
+[Parallel + Thread Pool + Sleep]:		[72.212] ms
+===================================================================================
+===================================================================================
+Test name: mandelbrot_chunked_async
+===================================================================================
+[Serial]:		[755.512] ms
+[Parallel + Always Spawn]:		[755.295] ms
+[Parallel + Thread Pool + Spin]:		[755.431] ms
+[Parallel + Thread Pool + Sleep]:		[98.125] ms
+===================================================================================
+===================================================================================
+Test name: spin_between_run_calls_async
+===================================================================================
+[Serial]:		[558.874] ms
+[Parallel + Always Spawn]:		[558.794] ms
+[Parallel + Thread Pool + Spin]:		[558.889] ms
+[Parallel + Thread Pool + Sleep]:		[280.029] ms
+===================================================================================
+===================================================================================
+Test name: strict_diamond_deps_async
+===================================================================================
+[Serial]:		[1.296] ms
+[Parallel + Always Spawn]:		[1.291] ms
+[Parallel + Thread Pool + Spin]:		[1.286] ms
+[Parallel + Thread Pool + Sleep]:		[0.332] ms
+===================================================================================
+===================================================================================
+Test name: strict_graph_deps_small_async
+===================================================================================
+[Serial]:		[1.995] ms
+[Parallel + Always Spawn]:		[2.003] ms
+[Parallel + Thread Pool + Spin]:		[1.993] ms
+[Parallel + Thread Pool + Sleep]:		[0.332] ms
+===================================================================================
+===================================================================================
+Test name: strict_graph_deps_med_async
+===================================================================================
+[Serial]:		[48.127] ms
+[Parallel + Always Spawn]:		[48.007] ms
+[Parallel + Thread Pool + Spin]:		[48.133] ms
+[Parallel + Thread Pool + Sleep]:		[6.360] ms
+===================================================================================
+===================================================================================
+Test name: strict_graph_deps_large_async
+===================================================================================
+[Serial]:		[474.148] ms
+[Parallel + Always Spawn]:		[474.059] ms
+[Parallel + Thread Pool + Spin]:		[473.570] ms
+[Parallel + Thread Pool + Sleep]:		[60.415] ms
+===================================================================================
+===================================================================================
+Test name: abcd_dag_async
+===================================================================================
+[Serial]:		[232.016] ms
+[Parallel + Always Spawn]:		[232.015] ms
+[Parallel + Thread Pool + Spin]:		[232.016] ms
+[Parallel + Thread Pool + Sleep]:		[32.166] ms
+===================================================================================
+===================================================================================
+Test name: abcd_dag_split_async
+===================================================================================
+[Serial]:		[232.017] ms
+[Parallel + Always Spawn]:		[232.017] ms
+[Parallel + Thread Pool + Spin]:		[232.017] ms
+[Parallel + Thread Pool + Sleep]:		[30.190] ms
+===================================================================================
+===================================================================================
+Test name: simple_test_sync
+===================================================================================
+[Serial]:		[0.000] ms
+[Parallel + Always Spawn]:		[0.000] ms
+[Parallel + Thread Pool + Spin]:		[0.000] ms
+[Parallel + Thread Pool + Sleep]:		[0.039] ms
+===================================================================================
+===================================================================================
+Test name: exactly_once_stress
+===================================================================================
+[Serial]:		[119.740] ms
+[Parallel + Always Spawn]:		[119.745] ms
+[Parallel + Thread Pool + Spin]:		[119.745] ms
+[Parallel + Thread Pool + Sleep]:		[52.036] ms
+===================================================================================
+===================================================================================
+Test name: super_super_light
+===================================================================================
+[Serial]:		[12.342] ms
+[Parallel + Always Spawn]:		[12.340] ms
+[Parallel + Thread Pool + Spin]:		[12.351] ms
+[Parallel + Thread Pool + Sleep]:		[18.194] ms
+===================================================================================
+===================================================================================
+Test name: super_light
+===================================================================================
+[Serial]:		[115.473] ms
+[Parallel + Always Spawn]:		[115.281] ms
+[Parallel + Thread Pool + Spin]:		[115.420] ms
+[Parallel + Thread Pool + Sleep]:		[26.244] ms
+===================================================================================
+===================================================================================
+Test name: ping_pong_equal
+===================================================================================
+[Serial]:		[1853.707] ms
+[Parallel + Always Spawn]:		[1949.211] ms
+[Parallel + Thread Pool + Spin]:		[1873.679] ms
+[Parallel + Thread Pool + Sleep]:		[315.763] ms
+===================================================================================
+===================================================================================
+Test name: ping_pong_unequal
+===================================================================================
+[Serial]:		[3340.234] ms
+[Parallel + Always Spawn]:		[3338.740] ms
+[Parallel + Thread Pool + Spin]:		[3328.333] ms
+[Parallel + Thread Pool + Sleep]:		[509.353] ms
+===================================================================================
+===================================================================================
+Test name: recursive_fibonacci
+===================================================================================
+[Serial]:		[1620.767] ms
+[Parallel + Always Spawn]:		[1651.231] ms
+[Parallel + Thread Pool + Spin]:		[1629.502] ms
+[Parallel + Thread Pool + Sleep]:		[241.560] ms
+===================================================================================
+===================================================================================
+Test name: math_operations_in_tight_for_loop
+===================================================================================
+[Serial]:		[1151.153] ms
+[Parallel + Always Spawn]:		[1146.762] ms
+[Parallel + Thread Pool + Spin]:		[1142.020] ms
+[Parallel + Thread Pool + Sleep]:		[254.110] ms
+===================================================================================
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fewer_tasks
+===================================================================================
+[Serial]:		[1137.983] ms
+[Parallel + Always Spawn]:		[1145.175] ms
+[Parallel + Thread Pool + Spin]:		[1142.532] ms
+[Parallel + Thread Pool + Sleep]:		[288.940] ms
+===================================================================================
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fan_in
+===================================================================================
+[Serial]:		[579.945] ms
+[Parallel + Always Spawn]:		[580.496] ms
+[Parallel + Thread Pool + Spin]:		[580.519] ms
+[Parallel + Thread Pool + Sleep]:		[99.013] ms
+===================================================================================
+===================================================================================
+Test name: math_operations_in_tight_for_loop_reduction_tree
+===================================================================================
+[Serial]:		[578.917] ms
+[Parallel + Always Spawn]:		[583.519] ms
+[Parallel + Thread Pool + Spin]:		[580.647] ms
+[Parallel + Thread Pool + Sleep]:		[93.445] ms
+===================================================================================
+===================================================================================
+Test name: spin_between_run_calls
+===================================================================================
+[Serial]:		[572.480] ms
+[Parallel + Always Spawn]:		[562.598] ms
+[Parallel + Thread Pool + Spin]:		[563.221] ms
+[Parallel + Thread Pool + Sleep]:		[293.733] ms
+===================================================================================
+===================================================================================
+Test name: mandelbrot_chunked
+===================================================================================
+[Serial]:		[757.548] ms
+[Parallel + Always Spawn]:		[758.341] ms
+[Parallel + Thread Pool + Spin]:		[757.653] ms
+[Parallel + Thread Pool + Sleep]:		[100.722] ms
+===================================================================================</pre>
+<h3>B.3 <code>part5_async_deps</code> — <code>./runtasks -n 16 -i 1 simple_run_deps_test</code></h3>
+<p class="small muted">The tasks sleep for 1, 5 and 10 s, so this test was run once. The serial stubs take about 160 s each.</p>
+<pre class='log'>===================================================================================
+Test name: simple_run_deps_test
+===================================================================================
+Running SleepTask (1s), task 0
+Running SleepTask (1s), task 1
+Running SleepTask (1s), task 2
+Running SleepTask (1s), task 3
+Running SleepTask (1s), task 4
+Running SleepTask (1s), task 5
+Running SleepTask (1s), task 6
+Running SleepTask (1s), task 7
+Running SleepTask (1s), task 8
+Running SleepTask (1s), task 9
+Running SleepTask (5s), task 0
+Running SleepTask (5s), task 1
+Running SleepTask (5s), task 2
+Running SleepTask (5s), task 3
+Running SleepTask (5s), task 4
+Running SleepTask (5s), task 5
+Running SleepTask (10s), task 0
+Running SleepTask (10s), task 1
+Running SleepTask (10s), task 2
+Running SleepTask (10s), task 3
+Running SleepTask (10s), task 4
+Running SleepTask (10s), task 5
+Running SleepTask (10s), task 6
+Running SleepTask (10s), task 7
+Running SleepTask (10s), task 8
+Running SleepTask (10s), task 9
+Running SleepTask (10s), task 10
+Running SleepTask (10s), task 11
+[Serial]:		[160003.175] ms
+Running SleepTask (1s), task 0
+Running SleepTask (1s), task 1
+Running SleepTask (1s), task 2
+Running SleepTask (1s), task 3
+Running SleepTask (1s), task 4
+Running SleepTask (1s), task 5
+Running SleepTask (1s), task 6
+Running SleepTask (1s), task 7
+Running SleepTask (1s), task 8
+Running SleepTask (1s), task 9
+Running SleepTask (5s), task 0
+Running SleepTask (5s), task 1
+Running SleepTask (5s), task 2
+Running SleepTask (5s), task 3
+Running SleepTask (5s), task 4
+Running SleepTask (5s), task 5
+Running SleepTask (10s), task 0
+Running SleepTask (10s), task 1
+Running SleepTask (10s), task 2
+Running SleepTask (10s), task 3
+Running SleepTask (10s), task 4
+Running SleepTask (10s), task 5
+Running SleepTask (10s), task 6
+Running SleepTask (10s), task 7
+Running SleepTask (10s), task 8
+Running SleepTask (10s), task 9
+Running SleepTask (10s), task 10
+Running SleepTask (10s), task 11
+[Parallel + Always Spawn]:		[160006.595] ms
+Running SleepTask (1s), task 0
+Running SleepTask (1s), task 1
+Running SleepTask (1s), task 2
+Running SleepTask (1s), task 3
+Running SleepTask (1s), task 4
+Running SleepTask (1s), task 5
+Running SleepTask (1s), task 6
+Running SleepTask (1s), task 7
+Running SleepTask (1s), task 8
+Running SleepTask (1s), task 9
+Running SleepTask (5s), task 0
+Running SleepTask (5s), task 1
+Running SleepTask (5s), task 2
+Running SleepTask (5s), task 3
+Running SleepTask (5s), task 4
+Running SleepTask (5s), task 5
+Running SleepTask (10s), task 0
+Running SleepTask (10s), task 1
+Running SleepTask (10s), task 2
+Running SleepTask (10s), task 3
+Running SleepTask (10s), task 4
+Running SleepTask (10s), task 5
+Running SleepTask (10s), task 6
+Running SleepTask (10s), task 7
+Running SleepTask (10s), task 8
+Running SleepTask (10s), task 9
+Running SleepTask (10s), task 10
+Running SleepTask (10s), task 11
+[Parallel + Thread Pool + Spin]:		[160005.143] ms
+Running SleepTask (1s), task 3
+Running SleepTask (1s), task 7
+Running SleepTask (1s), task 4
+Running SleepTask (1s), task 8
+Running SleepTask (1s), task 2
+Running SleepTask (1s), task 6
+Running SleepTask (1s), task 9
+Running SleepTask (1s), task 1
+Running SleepTask (1s), task 0
+Running SleepTask (1s), task 5
+Running SleepTask (5s), task 0
+Running SleepTask (5s), task 1
+Running SleepTask (5s), task 4
+Running SleepTask (5s), task 3
+Running SleepTask (5s), task 2
+Running SleepTask (5s), task 5
+Running SleepTask (10s), task 3
+Running SleepTask (10s), task 0
+Running SleepTask (10s), task 4
+Running SleepTask (10s), task 2
+Running SleepTask (10s), task 1
+Running SleepTask (10s), task 9
+Running SleepTask (10s), task 11
+Running SleepTask (10s), task 7
+Running SleepTask (10s), task 8
+Running SleepTask (10s), task 5
+Running SleepTask (10s), task 6
+Running SleepTask (10s), task 10
+[Parallel + Thread Pool + Sleep]:		[16000.843] ms
+===================================================================================</pre>
+
 
 </body>
 </html>

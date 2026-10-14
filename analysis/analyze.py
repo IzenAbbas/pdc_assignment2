@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 import matplotlib
+import matplotlib.ticker
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -244,6 +245,9 @@ def grid_figure(tests, kind, path, ncols=3):
         if kind == "runtime":
             ax.axhline(T1, color=MUTED, lw=1, ls="--", zorder=2)
             ax.set_yscale("log")
+            ax.yaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1, 2, 5)))
+            ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
+            ax.yaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
             ax.set_ylabel("time (ms)")
         elif kind == "speedup":
             top = max(max(T1 / tp(SYNC, test, i, p) for i in IMPLS for p in P) * 1.18, 1.3)
@@ -289,12 +293,15 @@ def granularity_figure(path):
             ax.plot(CHUNKS, ys, color=COLOR[impl], marker=MARKER[impl], lw=2, ms=5, mec="white",
                     mew=1, zorder=3)
         ax.axhline(T1 / p, color=MUTED, lw=1, ls="--", zorder=2)
-        ax.text(1.2, T1 / p, f" ideal T1/p = {T1 / p:.0f} ms", color=INK2, fontsize=7, va="bottom")
+        ax.text(1.2, T1 / p * 0.93, f" ideal T1/p = {T1 / p:.0f} ms", color=INK2, fontsize=7, va="top")
         ax.set_xscale("log", base=2)
         ax.set_xticks(CHUNKS)
         ax.set_xticklabels([f"{c}\n({N_ITEMS // c} tasks)" for c in CHUNKS], fontsize=6.5)
         ax.minorticks_off()
         ax.set_yscale("log")
+        ax.set_yticks([10, 20, 40, 80, 120])
+        ax.set_yticklabels(["10", "20", "40", "80", "120"])
+        ax.minorticks_off()
         ax.set_title(f"p = {p} workers", loc="left")
         ax.set_xlabel("chunk size (items per task)")
     axes[0].set_ylabel("time (ms), log scale")

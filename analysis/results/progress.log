@@ -1,0 +1,14 @@
+16:29:50 running math_operations_in_tight_for_loop_fewer_tasks_async n=8
+16:30:08 running math_operations_in_tight_for_loop_fewer_tasks_async n=16
+16:30:26 running math_operations_in_tight_for_loop_fan_in n=1
+16:30:37 running math_operations_in_tight_for_loop_fan_in n=2
+16:30:48 running math_operations_in_tight_for_loop_fan_in n=4
+16:30:58 running math_operations_in_tight_for_loop_fan_in n=8
+16:31:07 running math_operations_in_tight_for_loop_fan_in n=16
+16:31:16 running math_operations_in_tight_for_loop_fan_in_async n=1
+16:31:28 running math_operations_in_tight_for_loop_fan_in_async n=2
+16:31:38 running math_operations_in_tight_for_loop_fan_in_async n=4
+16:31:48 running math_operations_in_tight_for_loop_fan_in_async n=8
+16:31:57 running math_operations_in_tight_for_loop_fan_in_async n=16
+16:32:06 ALL MEASUREMENTS DONE
+EVIDENCE DONE

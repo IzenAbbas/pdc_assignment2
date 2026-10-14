@@ -1,0 +1,129 @@
+== T1 (Serial, ms)
+  super_super_light                                         12.3
+  super_light                                              116.0
+  ping_pong_equal                                         1849.8
+  ping_pong_unequal                                       3330.9
+  recursive_fibonacci                                     1604.6
+  math_operations_in_tight_for_loop                       1128.7
+  math_operations_in_tight_for_loop_fewer_tasks           1127.9
+  math_operations_in_tight_for_loop_fan_in                 578.9
+  math_operations_in_tight_for_loop_reduction_tree         577.4
+  spin_between_run_calls                                   559.3
+  mandelbrot_chunked                                       753.5
+
+== Runtime improvement when doubling p (Spawn, Spin, Sleep); first p with <10% marked *
+  super_super_light                        Spawn first<10%: p=2  | 1->2:  +5.2%  2->4: -22.4%  4->8: -139.8%  8->16: -130.4%
+  super_super_light                        Spin  first<10%: p=4  | 1->2: +40.9%  2->4:  +0.4%  4->8: -26.3%  8->16: -1907.9%
+  super_super_light                        Sleep first<10%: p=4  | 1->2: +20.9%  2->4:  -0.4%  4->8: -29.9%  8->16: -35.6%
+  super_light                              Spawn first<10%: p=8  | 1->2: +44.5%  2->4: +28.9%  4->8: -45.8%  8->16: -109.3%
+  super_light                              Spin  first<10%: p=16  | 1->2: +48.4%  2->4: +45.4%  4->8: +34.7%  8->16: -394.6%
+  super_light                              Sleep first<10%: p=16  | 1->2: +46.2%  2->4: +46.8%  4->8: +27.7%  8->16: -16.3%
+  ping_pong_equal                          Spawn first<10%: p=16  | 1->2: +48.2%  2->4: +46.9%  4->8: +34.1%  8->16:  +1.7%
+  ping_pong_equal                          Spin  first<10%: p=16  | 1->2: +50.2%  2->4: +48.9%  4->8: +43.8%  8->16: -76.3%
+  ping_pong_equal                          Sleep first<10%: p=16  | 1->2: +49.3%  2->4: +47.3%  4->8: +47.9%  8->16:  +2.6%
+  ping_pong_unequal                        Spawn first<10%: p=16  | 1->2: +50.1%  2->4: +47.7%  4->8: +45.2%  8->16:  -0.9%
+  ping_pong_unequal                        Spin  first<10%: p=16  | 1->2: +49.8%  2->4: +50.0%  4->8: +44.8%  8->16: -73.1%
+  ping_pong_unequal                        Sleep first<10%: p=None  | 1->2: +49.2%  2->4: +49.2%  4->8: +47.2%  8->16: +10.3%
+  recursive_fibonacci                      Spawn first<10%: p=16  | 1->2: +50.0%  2->4: +49.4%  4->8: +48.4%  8->16:  +0.4%
+  recursive_fibonacci                      Spin  first<10%: p=16  | 1->2: +50.1%  2->4: +49.9%  4->8: +46.5%  8->16: -20.6%
+  recursive_fibonacci                      Sleep first<10%: p=16  | 1->2: +49.8%  2->4: +49.9%  4->8: +46.5%  8->16:  +5.2%
+  math_operations_in_tight_for_loop        Spawn first<10%: p=8  | 1->2: +43.1%  2->4: +40.8%  4->8:  -9.1%  8->16: -97.9%
+  math_operations_in_tight_for_loop        Spin  first<10%: p=16  | 1->2: +48.2%  2->4: +45.1%  4->8: +23.4%  8->16: -91.9%
+  math_operations_in_tight_for_loop        Sleep first<10%: p=None  | 1->2: +49.0%  2->4: +46.9%  4->8: +23.6%  8->16: +13.9%
+  math_operations_in_tight_for_loop_fewer_ Spawn first<10%: p=8  | 1->2: +44.1%  2->4: +37.7%  4->8:  -2.7%  8->16:  -2.9%
+  math_operations_in_tight_for_loop_fewer_ Spin  first<10%: p=16  | 1->2: +43.3%  2->4: +38.9%  4->8: +30.0%  8->16: -32.8%
+  math_operations_in_tight_for_loop_fewer_ Sleep first<10%: p=16  | 1->2: +45.7%  2->4: +38.4%  4->8: +29.5%  8->16:  +2.7%
+  math_operations_in_tight_for_loop_fan_in Spawn first<10%: p=16  | 1->2: +43.4%  2->4: +50.0%  4->8: +32.0%  8->16: -15.5%
+  math_operations_in_tight_for_loop_fan_in Spin  first<10%: p=16  | 1->2: +47.4%  2->4: +48.9%  4->8: +41.7%  8->16: -74.4%
+  math_operations_in_tight_for_loop_fan_in Sleep first<10%: p=None  | 1->2: +45.7%  2->4: +47.1%  4->8: +39.7%  8->16: +23.6%
+  math_operations_in_tight_for_loop_reduct Spawn first<10%: p=16  | 1->2: +48.9%  2->4: +48.0%  4->8: +44.8%  8->16:  +7.8%
+  math_operations_in_tight_for_loop_reduct Spin  first<10%: p=16  | 1->2: +49.1%  2->4: +49.6%  4->8: +32.1%  8->16:  -6.3%
+  math_operations_in_tight_for_loop_reduct Sleep first<10%: p=None  | 1->2: +49.2%  2->4: +48.8%  4->8: +40.4%  8->16: +21.7%
+  spin_between_run_calls                   Spawn first<10%: p=4  | 1->2: +49.9%  2->4:  +0.0%  4->8:  -0.1%  8->16:  +0.1%
+  spin_between_run_calls                   Spin  first<10%: p=4  | 1->2: +50.0%  2->4:  -0.0%  4->8:  -0.1%  8->16: -111.4%
+  spin_between_run_calls                   Sleep first<10%: p=4  | 1->2: +49.9%  2->4:  -0.0%  4->8:  +0.0%  8->16:  +0.1%
+  mandelbrot_chunked                       Spawn first<10%: p=None  | 1->2: +50.1%  2->4: +49.9%  4->8: +49.8%  8->16: +44.0%
+  mandelbrot_chunked                       Spin  first<10%: p=None  | 1->2: +50.2%  2->4: +49.9%  4->8: +49.2%  8->16: +37.5%
+  mandelbrot_chunked                       Sleep first<10%: p=None  | 1->2: +50.1%  2->4: +49.9%  4->8: +49.4%  8->16: +45.9%
+
+== Spawn - Spin per launch (ms) = thread create+join cost per launch
+  super_super_light                             L=  400  p=1:    26.0 us  p=2:    40.1 us  p=4:    55.0 us  p=8:   160.9 us  p=16:  -204.0 us
+  super_light                                   L=  400  p=1:    66.7 us  p=2:    48.6 us  p=4:    59.8 us  p=8:   154.6 us  p=16:   167.6 us
+  ping_pong_equal                               L=  400  p=1:    79.2 us  p=2:   139.0 us  p=4:   121.1 us  p=8:   196.5 us  p=16:  -332.7 us
+  ping_pong_unequal                             L=  400  p=1:   223.5 us  p=2:    85.4 us  p=4:   141.8 us  p=8:    70.8 us  p=16:  -766.6 us
+  recursive_fibonacci                           L=   30  p=1:   206.1 us  p=2:   157.4 us  p=4:   212.8 us  p=8:  -147.2 us  p=16: -1657.6 us
+  math_operations_in_tight_for_loop             L= 2000  p=1:    76.4 us  p=2:    72.5 us  p=4:    55.7 us  p=8:   113.0 us  p=16:   231.0 us
+  math_operations_in_tight_for_loop_fewer_tasks L= 2000  p=1:    88.9 us  p=2:    45.4 us  p=4:    32.1 us  p=8:    97.1 us  p=16:    59.1 us
+
+== Overhead above ideal: Tp - T1/p (ms)
+  super_super_light                        Spawn p=1:     15.4  p=2:     20.2  p=4:     29.1  p=8:     75.7  p=16:    177.3
+  super_super_light                        Spin  p=1:      5.0  p=2:      4.1  p=4:      7.2  p=8:     11.4  p=16:    258.9
+  super_super_light                        Sleep p=1:      4.8  p=2:      7.4  p=4:     10.5  p=8:     16.2  p=16:     23.2
+  super_light                              Spawn p=1:     29.6  p=2:     22.8  p=4:     28.4  p=8:     69.2  p=16:    167.9
+  super_light                              Spin  p=1:      2.9  p=2:      3.3  p=4:      4.5  p=8:      7.4  p=16:    100.8
+  super_light                              Sleep p=1:      7.5  p=2:      8.4  p=4:      6.3  p=8:     11.1  p=16:     22.5
+  ping_pong_equal                          Spawn p=1:     69.5  p=2:     69.8  p=4:     65.7  p=8:    116.8  p=16:    226.4
+  ping_pong_equal                          Spin  p=1:     37.8  p=2:     14.2  p=4:     17.3  p=8:     38.2  p=16:    359.5
+  ping_pong_equal                          Sleep p=1:     46.3  p=2:     35.9  p=4:     43.8  p=8:     32.5  p=16:    141.2
+  ping_pong_unequal                        Spawn p=1:    107.3  p=2:     51.0  p=4:     65.3  p=8:     76.1  p=16:    288.6
+  ping_pong_unequal                        Spin  p=1:     17.9  p=2:     16.8  p=4:      8.6  p=8:     47.8  p=16:    595.3
+  ping_pong_unequal                        Sleep p=1:     12.2  p=2:     34.0  p=4:     31.2  p=8:     40.1  p=16:    201.2
+  recursive_fibonacci                      Spawn p=1:     11.5  p=2:      5.5  p=4:      7.4  p=8:     10.3  p=16:    109.6
+  recursive_fibonacci                      Spin  p=1:      5.3  p=2:      0.8  p=4:      1.0  p=8:     14.7  p=16:    159.4
+  recursive_fibonacci                      Sleep p=1:      6.7  p=2:      6.5  p=4:      4.1  p=8:     16.2  p=16:    105.2
+  math_operations_in_tight_for_loop        Spawn p=1:    157.3  p=2:    167.5  p=4:    151.4  p=8:    331.8  p=16:    865.3
+  math_operations_in_tight_for_loop        Spin  p=1:      4.6  p=2:     22.4  p=4:     40.0  p=8:    105.8  p=16:    403.2
+  math_operations_in_tight_for_loop        Sleep p=1:     76.8  p=2:     50.1  p=4:     44.2  p=8:    108.3  p=16:    144.3
+  math_operations_in_tight_for_loop_fewer_ Spawn p=1:    182.4  p=2:    168.9  p=4:    174.5  p=8:    327.7  p=16:    412.0
+  math_operations_in_tight_for_loop_fewer_ Spin  p=1:      4.7  p=2:     78.2  p=4:    110.3  p=8:    133.4  p=16:    293.9
+  math_operations_in_tight_for_loop_fewer_ Sleep p=1:     80.7  p=2:     92.8  p=4:    122.7  p=8:    144.3  p=16:    207.0
+  math_operations_in_tight_for_loop_fan_in Spawn p=1:     26.4  p=2:     53.3  p=4:     26.6  p=8:     44.1  p=16:     98.4
+  math_operations_in_tight_for_loop_fan_in Spin  p=1:      0.2  p=2:     15.0  p=4:     10.8  p=8:     18.3  p=16:    121.9
+  math_operations_in_tight_for_loop_fan_in Sleep p=1:      5.9  p=2:     27.8  p=4:     23.1  p=8:     28.9  p=16:     41.1
+  math_operations_in_tight_for_loop_reduct Spawn p=1:     -6.5  p=2:      3.0  p=4:      7.3  p=8:     11.5  p=16:     41.1
+  math_operations_in_tight_for_loop_reduct Spin  p=1:     -7.0  p=2:      1.4  p=4:      1.8  p=8:     27.1  p=16:     69.4
+  math_operations_in_tight_for_loop_reduct Sleep p=1:     -4.2  p=2:      2.5  p=4:      4.8  p=8:     16.7  p=16:     33.6
+  spin_between_run_calls                   Spawn p=1:      1.1  p=2:      0.9  p=4:    140.7  p=8:    210.9  p=16:    245.7
+  spin_between_run_calls                   Spin  p=1:      0.4  p=2:      0.4  p=4:    140.2  p=8:    210.6  p=16:    558.0
+  spin_between_run_calls                   Sleep p=1:      0.4  p=2:      0.7  p=4:    140.7  p=8:    210.5  p=16:    245.3
+  mandelbrot_chunked                       Spawn p=1:      2.9  p=2:      0.7  p=4:      0.6  p=8:      0.7  p=16:      6.0
+  mandelbrot_chunked                       Spin  p=1:      3.0  p=2:      0.3  p=4:      0.5  p=8:      1.7  p=16:     12.8
+  mandelbrot_chunked                       Sleep p=1:      2.4  p=2:      0.7  p=4:      0.7  p=8:      1.4  p=16:      4.6
+
+== Part 4 example (ms)
+  irregular_example_static     p= 1 Serial=  44.00  Spawn=  44.13  Spin=  44.04  Sleep=  44.09
+  irregular_example_static     p= 2 Serial=  44.00  Spawn=  22.14  Spin=  22.01  Sleep=  22.06
+  irregular_example_static     p= 4 Serial=  44.00  Spawn=  20.15  Spin=  20.01  Sleep=  20.07
+  irregular_example_static     p= 8 Serial=  44.00  Spawn=  20.14  Spin=  20.01  Sleep=  20.03
+  irregular_example_static     p=16 Serial=  44.00  Spawn=  20.15  Spin=  20.01  Sleep=  20.07
+  irregular_example_dynamic    p= 1 Serial=  44.00  Spawn=  44.14  Spin=  44.03  Sleep=  44.09
+  irregular_example_dynamic    p= 2 Serial=  44.00  Spawn=  22.12  Spin=  22.03  Sleep=  22.09
+  irregular_example_dynamic    p= 4 Serial=  44.00  Spawn=  11.13  Spin=  11.01  Sleep=  11.06
+  irregular_example_dynamic    p= 8 Serial=  44.00  Spawn=  10.25  Spin=  10.01  Sleep=  10.04
+  irregular_example_dynamic    p=16 Serial=  44.00  Spawn=  10.25  Spin=  10.01  Sleep=  10.05
+
+== Part 4 granularity (ms); H estimate = (Tp(chunk) - Tp(256)) * p / tasks(chunk)
+  T1 = 158.6 ms, T per item = 605 ns
+  p= 1 Spawn c1=   160.2  c16=   157.6  c256=   158.5  c4096=   157.9  c65536=   157.6   H(chunk1)~     7 ns
+  p= 1 Spin  c1=   196.3  c16=   161.3  c256=   157.9  c4096=   157.5  c65536=   157.5   H(chunk1)~   147 ns
+  p= 1 Sleep c1=   166.0  c16=   158.2  c256=   157.7  c4096=   157.4  c65536=   157.5   H(chunk1)~    32 ns
+  p= 2 Spawn c1=    92.2  c16=    82.9  c256=    80.3  c4096=    78.9  c65536=    79.0   H(chunk1)~    91 ns
+  p= 2 Spin  c1=   120.1  c16=    82.6  c256=    79.5  c4096=    78.8  c65536=    78.8   H(chunk1)~   310 ns
+  p= 2 Sleep c1=   110.6  c16=    81.7  c256=    79.8  c4096=    78.9  c65536=    78.8   H(chunk1)~   235 ns
+  p= 4 Spawn c1=    50.9  c16=    41.8  c256=    39.8  c4096=    39.6  c65536=    69.4   H(chunk1)~   169 ns
+  p= 4 Spin  c1=    90.0  c16=    42.8  c256=    39.9  c4096=    39.4  c65536=    69.3   H(chunk1)~   764 ns
+  p= 4 Sleep c1=    80.2  c16=    42.6  c256=    40.2  c4096=    39.7  c65536=    69.3   H(chunk1)~   609 ns
+  p= 8 Spawn c1=    27.6  c16=    21.0  c256=    20.5  c4096=    20.3  c65536=    69.5   H(chunk1)~   218 ns
+  p= 8 Spin  c1=   104.3  c16=    21.1  c256=    20.2  c4096=    20.1  c65536=    69.3   H(chunk1)~  2567 ns
+  p= 8 Sleep c1=    93.7  c16=    21.1  c256=    20.2  c4096=    20.1  c65536=    69.3   H(chunk1)~  2243 ns
+  p=16 Spawn c1=    20.9  c16=    15.9  c256=    14.5  c4096=    14.6  c65536=    69.5   H(chunk1)~   391 ns
+  p=16 Spin  c1=   117.8  c16=    20.5  c256=    16.4  c4096=    14.6  c65536=    70.9   H(chunk1)~  6188 ns
+  p=16 Sleep c1=    97.2  c16=    15.1  c256=    12.7  c4096=    14.4  c65536=    69.5   H(chunk1)~  5157 ns
+
+== Part 5 (Sleep, ms)
+  abcd_dag_async                                       p=1:    232.2  p=2:    116.2  p=4:     60.1  p=8:     32.1  p=16:     23.1   (Serial 232.0)
+  abcd_dag_split_async                                 p=1:    232.1  p=2:    116.2  p=4:     60.2  p=8:     30.1  p=16:     18.7   (Serial 232.0)
+  math_operations_in_tight_for_loop_fan_in             p=1:    594.2  p=2:    322.1  p=4:    165.6  p=8:     92.0  p=16:     78.0   (Serial 578.6)
+  math_operations_in_tight_for_loop_fan_in_async       p=1:    569.0  p=2:    311.5  p=4:    149.1  p=8:     90.9  p=16:     63.6   (Serial 580.0)
+  math_operations_in_tight_for_loop_fewer_tasks        p=1:   1735.0  p=2:    699.9  p=4:    416.3  p=8:    297.2  p=16:    282.7   (Serial 1124.6)
+  math_operations_in_tight_for_loop_fewer_tasks_async  p=1:   1133.0  p=2:    571.9  p=4:    280.2  p=8:    147.1  p=16:    121.6   (Serial 1119.5)

@@ -1,0 +1,270 @@
+### test=abcd_dag_async n=1
+===================================================================================
+Test name: abcd_dag_async
+===================================================================================
+[Serial]:		[232.022] ms
+[Parallel + Always Spawn]:		[232.022] ms
+[Parallel + Thread Pool + Spin]:		[232.029] ms
+[Parallel + Thread Pool + Sleep]:		[232.153] ms
+===================================================================================
+### test=abcd_dag_async n=2
+===================================================================================
+Test name: abcd_dag_async
+===================================================================================
+[Serial]:		[232.027] ms
+[Parallel + Always Spawn]:		[232.026] ms
+[Parallel + Thread Pool + Spin]:		[232.026] ms
+[Parallel + Thread Pool + Sleep]:		[116.233] ms
+===================================================================================
+### test=abcd_dag_async n=4
+===================================================================================
+Test name: abcd_dag_async
+===================================================================================
+[Serial]:		[232.026] ms
+[Parallel + Always Spawn]:		[232.032] ms
+[Parallel + Thread Pool + Spin]:		[232.022] ms
+[Parallel + Thread Pool + Sleep]:		[60.122] ms
+===================================================================================
+### test=abcd_dag_async n=8
+===================================================================================
+Test name: abcd_dag_async
+===================================================================================
+[Serial]:		[232.021] ms
+[Parallel + Always Spawn]:		[232.029] ms
+[Parallel + Thread Pool + Spin]:		[232.022] ms
+[Parallel + Thread Pool + Sleep]:		[32.118] ms
+===================================================================================
+### test=abcd_dag_async n=16
+===================================================================================
+Test name: abcd_dag_async
+===================================================================================
+[Serial]:		[232.021] ms
+[Parallel + Always Spawn]:		[232.019] ms
+[Parallel + Thread Pool + Spin]:		[232.022] ms
+[Parallel + Thread Pool + Sleep]:		[23.145] ms
+===================================================================================
+### test=abcd_dag_split_async n=1
+===================================================================================
+Test name: abcd_dag_split_async
+===================================================================================
+[Serial]:		[232.031] ms
+[Parallel + Always Spawn]:		[232.022] ms
+[Parallel + Thread Pool + Spin]:		[232.022] ms
+[Parallel + Thread Pool + Sleep]:		[232.139] ms
+===================================================================================
+### test=abcd_dag_split_async n=2
+===================================================================================
+Test name: abcd_dag_split_async
+===================================================================================
+[Serial]:		[232.027] ms
+[Parallel + Always Spawn]:		[232.025] ms
+[Parallel + Thread Pool + Spin]:		[232.024] ms
+[Parallel + Thread Pool + Sleep]:		[116.204] ms
+===================================================================================
+### test=abcd_dag_split_async n=4
+===================================================================================
+Test name: abcd_dag_split_async
+===================================================================================
+[Serial]:		[232.023] ms
+[Parallel + Always Spawn]:		[232.025] ms
+[Parallel + Thread Pool + Spin]:		[232.024] ms
+[Parallel + Thread Pool + Sleep]:		[60.165] ms
+===================================================================================
+### test=abcd_dag_split_async n=8
+===================================================================================
+Test name: abcd_dag_split_async
+===================================================================================
+[Serial]:		[232.024] ms
+[Parallel + Always Spawn]:		[232.022] ms
+[Parallel + Thread Pool + Spin]:		[232.024] ms
+[Parallel + Thread Pool + Sleep]:		[30.136] ms
+===================================================================================
+### test=abcd_dag_split_async n=16
+===================================================================================
+Test name: abcd_dag_split_async
+===================================================================================
+[Serial]:		[232.024] ms
+[Parallel + Always Spawn]:		[232.028] ms
+[Parallel + Thread Pool + Spin]:		[232.036] ms
+[Parallel + Thread Pool + Sleep]:		[18.731] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fewer_tasks n=1
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fewer_tasks
+===================================================================================
+[Serial]:		[1329.315] ms
+[Parallel + Always Spawn]:		[1458.707] ms
+[Parallel + Thread Pool + Spin]:		[1223.583] ms
+[Parallel + Thread Pool + Sleep]:		[1735.046] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fewer_tasks n=2
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fewer_tasks
+===================================================================================
+[Serial]:		[1310.462] ms
+[Parallel + Always Spawn]:		[1570.596] ms
+[Parallel + Thread Pool + Spin]:		[1319.008] ms
+[Parallel + Thread Pool + Sleep]:		[699.923] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fewer_tasks n=4
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fewer_tasks
+===================================================================================
+[Serial]:		[1124.643] ms
+[Parallel + Always Spawn]:		[1131.861] ms
+[Parallel + Thread Pool + Spin]:		[1128.190] ms
+[Parallel + Thread Pool + Sleep]:		[416.299] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fewer_tasks n=8
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fewer_tasks
+===================================================================================
+[Serial]:		[1144.313] ms
+[Parallel + Always Spawn]:		[1133.819] ms
+[Parallel + Thread Pool + Spin]:		[1137.735] ms
+[Parallel + Thread Pool + Sleep]:		[297.164] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fewer_tasks n=16
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fewer_tasks
+===================================================================================
+[Serial]:		[1132.133] ms
+[Parallel + Always Spawn]:		[1127.459] ms
+[Parallel + Thread Pool + Spin]:		[1128.075] ms
+[Parallel + Thread Pool + Sleep]:		[282.719] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fewer_tasks_async n=1
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fewer_tasks_async
+===================================================================================
+[Serial]:		[1129.997] ms
+[Parallel + Always Spawn]:		[1127.990] ms
+[Parallel + Thread Pool + Spin]:		[1131.100] ms
+[Parallel + Thread Pool + Sleep]:		[1132.979] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fewer_tasks_async n=2
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fewer_tasks_async
+===================================================================================
+[Serial]:		[1134.737] ms
+[Parallel + Always Spawn]:		[1129.890] ms
+[Parallel + Thread Pool + Spin]:		[1130.176] ms
+[Parallel + Thread Pool + Sleep]:		[571.879] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fewer_tasks_async n=4
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fewer_tasks_async
+===================================================================================
+[Serial]:		[1119.457] ms
+[Parallel + Always Spawn]:		[1114.682] ms
+[Parallel + Thread Pool + Spin]:		[1129.964] ms
+[Parallel + Thread Pool + Sleep]:		[280.226] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fewer_tasks_async n=8
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fewer_tasks_async
+===================================================================================
+[Serial]:		[1128.336] ms
+[Parallel + Always Spawn]:		[1125.384] ms
+[Parallel + Thread Pool + Spin]:		[1129.840] ms
+[Parallel + Thread Pool + Sleep]:		[147.131] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fewer_tasks_async n=16
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fewer_tasks_async
+===================================================================================
+[Serial]:		[1134.776] ms
+[Parallel + Always Spawn]:		[1134.268] ms
+[Parallel + Thread Pool + Spin]:		[1131.063] ms
+[Parallel + Thread Pool + Sleep]:		[121.619] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fan_in n=1
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fan_in
+===================================================================================
+[Serial]:		[578.580] ms
+[Parallel + Always Spawn]:		[581.152] ms
+[Parallel + Thread Pool + Spin]:		[582.405] ms
+[Parallel + Thread Pool + Sleep]:		[594.180] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fan_in n=2
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fan_in
+===================================================================================
+[Serial]:		[581.209] ms
+[Parallel + Always Spawn]:		[580.992] ms
+[Parallel + Thread Pool + Spin]:		[583.181] ms
+[Parallel + Thread Pool + Sleep]:		[322.102] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fan_in n=4
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fan_in
+===================================================================================
+[Serial]:		[579.285] ms
+[Parallel + Always Spawn]:		[581.371] ms
+[Parallel + Thread Pool + Spin]:		[578.684] ms
+[Parallel + Thread Pool + Sleep]:		[165.619] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fan_in n=8
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fan_in
+===================================================================================
+[Serial]:		[581.002] ms
+[Parallel + Always Spawn]:		[580.250] ms
+[Parallel + Thread Pool + Spin]:		[581.965] ms
+[Parallel + Thread Pool + Sleep]:		[92.024] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fan_in n=16
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fan_in
+===================================================================================
+[Serial]:		[582.203] ms
+[Parallel + Always Spawn]:		[581.720] ms
+[Parallel + Thread Pool + Spin]:		[581.217] ms
+[Parallel + Thread Pool + Sleep]:		[78.004] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fan_in_async n=1
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fan_in_async
+===================================================================================
+[Serial]:		[579.971] ms
+[Parallel + Always Spawn]:		[578.979] ms
+[Parallel + Thread Pool + Spin]:		[578.201] ms
+[Parallel + Thread Pool + Sleep]:		[568.987] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fan_in_async n=2
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fan_in_async
+===================================================================================
+[Serial]:		[583.709] ms
+[Parallel + Always Spawn]:		[580.469] ms
+[Parallel + Thread Pool + Spin]:		[580.643] ms
+[Parallel + Thread Pool + Sleep]:		[311.523] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fan_in_async n=4
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fan_in_async
+===================================================================================
+[Serial]:		[580.021] ms
+[Parallel + Always Spawn]:		[579.854] ms
+[Parallel + Thread Pool + Spin]:		[580.050] ms
+[Parallel + Thread Pool + Sleep]:		[149.052] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fan_in_async n=8
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fan_in_async
+===================================================================================
+[Serial]:		[581.321] ms
+[Parallel + Always Spawn]:		[582.743] ms
+[Parallel + Thread Pool + Spin]:		[583.924] ms
+[Parallel + Thread Pool + Sleep]:		[90.926] ms
+===================================================================================
+### test=math_operations_in_tight_for_loop_fan_in_async n=16
+===================================================================================
+Test name: math_operations_in_tight_for_loop_fan_in_async
+===================================================================================
+[Serial]:		[580.036] ms
+[Parallel + Always Spawn]:		[579.323] ms
+[Parallel + Thread Pool + Spin]:		[579.744] ms
+[Parallel + Thread Pool + Sleep]:		[63.646] ms
+===================================================================================

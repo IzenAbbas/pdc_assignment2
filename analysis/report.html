@@ -166,9 +166,79 @@ while (true) {
 //        done_cv_.wait(lock, [this] { return tasks_done_ == num_total_tasks_; });</pre>
 <p>All state is guarded by one mutex. After finishing a task, a worker keeps the lock to record the completion and claim its next task, so each task costs one lock round trip. The destructor sets <code>shutdown_</code> under the lock, calls <code>notify_all()</code> and joins. No thread busy-waits anywhere.</p>
 
-<!--S3-->
+<!-- ============================================================ 3 -->
+<h2>3. Part 1 — Synchronous parallel launch with Spawn</h2>
+<h3>3.1 Correctness and the added test</h3>
+<p>The added test is <code>exactly_once_stress</code> in <code>tests/tests.h</code>, registered in <code>tests/main.cpp</code>. It makes 20 rounds of back-to-back launches with task counts 0, 1, 2, 3, 5, 7, 8, 9, 15, 16, 17, 31, 33, 63, 64, 65, 127, 1000 and 4099. That covers very few tasks, many tasks, and counts that are not divisible by any power-of-two worker count. Each task busy-waits for a task-dependent 0–2 µs, so tasks finish out of order, then atomically increments a counter for its id. Right after <i>each</i> <code>run()</code> returns, every counter must be exactly 1. The test fails if any task ran twice (a duplicate claim), never ran, or had not finished when <code>run()</code> returned.</p>
+<p>It passes for all implementations at p = 1, 2, 3, 5, 8, 16 and 32, including 30 repeated runs. All supplied tests pass too (Appendix B), and ThreadSanitizer reports no races.</p>
 
-<!--S4-->
+<h3>3.2 Predictions recorded before measuring</h3>
+<ul>
+  <li><b>Best scaling:</b> <code>recursive_fibonacci</code>. It is compute-bound with no memory traffic, has 256 identical tasks per launch (far more than p), and only 30 launches, so launch overhead is negligible. I expected S ≈ 7 at p = 8 and 10–30% more at p = 16 from SMT.</li>
+  <li><b>Worst scaling:</b> <code>super_super_light</code>. A task copies 512 ints (about 0.5 µs) and there are 400 launches, so creating and joining threads in every launch should cost more than the work. I expected Spawn to be slower than serial at every p.</li>
+  <li><b>Non-uniform workload</b> (<code>ping_pong_unequal</code>): dynamic assignment of 64 tasks should absorb the cost skew, and memory traffic should limit scaling at p = 4–8.</li>
+</ul>
+
+<h3>3.3 Measurements (Spawn)</h3>
+<p>The three chosen workloads are <code>super_super_light</code> (very small tasks), <code>recursive_fibonacci</code> (substantial work per task) and <code>ping_pong_unequal</code> (non-uniform task cost). Appendix A has every workload and implementation.</p>
+<!--INCLUDE:generated/table_part1.html-->
+
+<h3>3.4 Analysis</h3>
+<p><span class="lead">First worker count where adding workers gains less than 10%.</span></p>
+<ul>
+  <li><b><code>super_super_light</code>: p = 2.</b> Doubling to 2 gains only 5% (27.8 → 26.3 ms), and every further doubling makes it <i>slower</i>: 32.2, 77.3 and 178.1 ms. The extra time is almost exactly the cost of creating more threads. Spawn exceeds the spinning pool by 55 µs per launch at p = 4 and 161 µs at p = 8, i.e. about 14–20 µs per thread created and joined, while one launch contains only about 31 µs of work (12.3 ms / 400).</li>
+  <li><b><code>recursive_fibonacci</code>: p = 16.</b> From 1 to 8 every doubling gains 48–50% (S<sub>8</sub> = 7.61). From 8 to 16 it gains 0.4%. p = 16 adds no cores, only SMT siblings, and this recursive call/branch-heavy code already keeps a core's execution resources busy, so two threads per core just share them.</li>
+  <li><b><code>ping_pong_unequal</code>: p = 16.</b> It gains 45–50% per doubling up to 8 (S<sub>8</sub> = 6.76), then −0.9% from 8 to 16, for the same SMT reason. Each launch also streams the 2 MB input and output arrays through the shared L3, which the siblings share as well.</li>
+</ul>
+<p><span class="lead">Static vs dynamic assignment for the irregular workload.</span> In <code>ping_pong_unequal</code>, element i costs about 2·iters·(1 − i/N), so task t of 64 costs about 2(1 − (t+0.5)/64) times the average: task 0 about 2×, task 63 about 0.02×.</p>
+<ul>
+  <li><b>Load balance.</b> A static <i>contiguous</i> split gives worker 0 of 4 tasks 0–15, which is 44% of the work, so the makespan is 1.75× ideal (57% efficiency). A static <i>interleaved</i> split (t mod p) is much better: the worst worker gets 16.75/16 of its share, about 95% efficiency. Dynamic assignment is better still. Tasks are claimed in decreasing cost order, so the only imbalance is the final cheap tasks, and the work comes out nearly perfectly balanced.</li>
+  <li><b>Scheduling cost.</b> Static assignment needs no coordination: a worker computes its own ids. Dynamic assignment costs one atomic <code>fetch_add</code> per task, roughly 50–100 ns when the cache line moves between cores, so 64 × 100 ns ≈ 6 µs per launch. Each launch here does 2.2 ms of work at p = 4, so the cost is negligible.</li>
+</ul>
+<p>Dynamic assignment is therefore expected to balance this workload better at negligible cost. That matches the measurement: Spawn reaches E<sub>4</sub> = 0.93 and E<sub>8</sub> = 0.85 on <code>ping_pong_unequal</code>, the same as on <code>ping_pong_equal</code>. The Part 4 example measures the difference directly: the static split takes 20.15 ms and the dynamic one 11.13 ms (Section 6). Dynamic assignment loses only when tasks are so small that the per-task claim is comparable to the task itself (Section 6.3).</p>
+<p><span class="lead">A correct run with little or no speedup.</span> <code>super_super_light</code> under Spawn produces correct results but S<sub>p</sub> = 0.44, 0.47, 0.38, 0.16 and 0.07 for p = 1 to 16. At p = 16 it takes 178 ms against 12.3 ms serially. A launch holds about 31 µs of useful work but Spawn creates and joins up to 16 threads per launch at about 20 µs each, so the program spends more than 90% of its time on thread management. A second example is <code>spin_between_run_calls</code>, where S<sub>p</sub> stays at 1.99 for every p ≥ 2: the only heavy launch has 2 tasks, so at most 2 workers are ever useful.</p>
+
+
+<!-- ============================================================ 4 -->
+<h2>4. Part 2 — Persistent thread pool with spinning</h2>
+<!--INCLUDE:generated/cmp_part2.html-->
+<p><span class="lead">Fine- vs coarse-grained workloads.</span> Replacing per-launch thread creation with a persistent pool helps exactly where launches are short.</p>
+<ul>
+  <li><b>Fine-grained.</b> At p = 8, <code>super_light</code> drops from 83.7 ms (Spawn) to 21.9 ms (Spin), 3.8× faster. <code>math_operations_in_tight_for_loop</code> drops from 472.8 to 246.9 ms (1.9×), and <code>super_super_light</code> at p = 4 from 32.2 to 10.2 ms.</li>
+  <li><b>Coarse-grained.</b> Nothing changes: <code>recursive_fibonacci</code> 210.8 vs 215.3 ms, <code>mandelbrot_chunked</code> 94.9 vs 95.9 ms.</li>
+</ul>
+<p>The reason is that thread creation is a fixed cost per launch, about 15–20 µs per thread. Compare it with the work in one launch:</p>
+<ul>
+  <li><code>recursive_fibonacci</code>: about 53 ms per launch (1605 ms / 30), so the overhead is under 0.5%.</li>
+  <li><code>mandelbrot_chunked</code>: a single launch.</li>
+  <li><code>super_light</code>: 0.29 ms per launch (116 ms / 400), so 8 thread creations (about 0.15 ms) are half the launch.</li>
+</ul>
+<p><span class="lead">Little or no work for some workers.</span> In <code>spin_between_run_calls</code>, the middle launch has 2 tasks, so p − 2 workers have nothing to do. Up to p = 8, Spin matches Sleep (about 280 ms). At p = 16, Spin takes <b>592.9 ms against 280.2 ms</b> for Sleep.</p>
+<p>The idle workers each execute the <code>has_work_</code> load-and-branch loop non-stop, and the calling thread spins on <code>tasks_done_</code>. At p = 16 that is 17 runnable threads on 16 hardware threads. The two workers computing fib(40) must share their cores with spinning SMT siblings and are time-sliced against the extra thread, so the useful work takes twice as long. The answers stay correct, but the spinners occupy hardware threads, take execution slots from their SMT siblings, keep the cores out of idle power states, and steal CPU from any other program.</p>
+<p>The same effect wrecks Spin on every many-launch workload at p = 16. <code>super_super_light</code> goes from 12.9 ms at p = 8 to 259.7 ms at p = 16, and <code>ping_pong_equal</code> from 269 to 475 ms. When a worker holding a task is descheduled, everyone waits for it.</p>
+<p><span class="lead">Faster than Spawn, yet efficiency still falls.</span> On <code>super_light</code>, Spin is faster than Spawn at every p ≤ 8, but its efficiency still falls: E = 0.95, 0.87, 0.66 at p = 2, 4, 8 (Spawn: 0.72, 0.50, 0.17). Both are true because the pool removes only one overhead term, thread creation. Each launch still pays costs that do not shrink with p:</p>
+<ul>
+  <li>publishing the launch and waiting for the slowest task (the barrier),</li>
+  <li>contention on the claim mutex, which grows with p,</li>
+  <li>a tail of 64 tasks spread over p workers.</li>
+</ul>
+<p>Meanwhile the useful work per worker shrinks as 1/p. An overhead that stays constant while the work divides makes T<sub>p</sub> fall more slowly than 1/p, so E<sub>p</sub> = T<sub>1</sub>/(p·T<sub>p</sub>) declines even though the pool beats Spawn at every p.</p>
+<p><span class="lead">Separating thread management from useful computation.</span> I take useful computation per worker as T<sub>1</sub>/p and overhead as O<sub>p</sub> = T<sub>p</sub> − T<sub>1</sub>/p. For <code>super_light</code> at p = 8:</p>
+<ul>
+  <li>Useful work: 14.5 ms.</li>
+  <li>Spawn overhead: 69.2 ms. Spin overhead: 7.4 ms.</li>
+  <li>The difference, 61.8 ms over 400 launches, is 155 µs per launch, i.e. about 19 µs to create and join each of the 8 threads. That is the thread-management cost.</li>
+  <li>The 7.4 ms Spin still pays (about 18 µs per launch) is synchronization, claiming and end-of-launch imbalance.</li>
+</ul>
+<p>The same calculation gives 72–76 µs per launch at p = 1–2 and 113–231 µs at p = 8–16 for <code>math_operations_in_tight_for_loop</code>. Limitations:</p>
+<ul>
+  <li>T<sub>1</sub>/p assumes the parallel work costs the same as the serial work. Cache effects break this: the reduction tree runs 1% <i>faster</i> than T<sub>1</sub> at p = 1, so O<sub>p</sub> is uncertain by about ±1% of T<sub>1</sub>.</li>
+  <li>End-to-end timings cannot separate synchronization from load imbalance.</li>
+  <li>Pool creation is outside the timed region, so the pool's own start-up cost is not included.</li>
+  <li>A minimum of 5 runs hides run-to-run variance.</li>
+  <li>The method fails at p = 16 for Spin, whose overhead is dominated by oversubscription; there the Spawn − Spin difference becomes negative.</li>
+</ul>
+
 
 <!-- ============================================================ 5 -->
 <h2>5. Part 3 — Sleeping thread pool and synchronization</h2>
@@ -196,7 +266,12 @@ while (true) {
   <li>If the condition is already true, the thread must not wait at all. The predicate is checked under the mutex before sleeping, so a notification sent before the wait cannot be lost.</li>
 </ol>
 
-<!--S5DATA-->
+<h3>5.2 Spawn vs Spin vs Sleep (measured)</h3>
+<!--INCLUDE:generated/cmp_part3.html-->
+<p><span class="lead">Fine-grained workload.</span> On <code>super_super_light</code> with p = 2–8, Spin is fastest: 10.3, 10.2 and 12.9 ms, against Sleep's 13.6, 13.6 and 17.7 ms. Over 400 launches, Sleep's 3.3–4.8 ms extra is 8–12 µs per launch, the price of putting threads to sleep and waking them. Each launch has to wake every worker (a futex system call per thread, plus the time for the scheduler to run it), and when the last task finishes, the caller must also be woken. A spinning worker notices the new launch within about 100 ns. On <code>math_operations_in_tight_for_loop</code> (2000 launches of 16 tasks) the two are within 1–5% for p ≤ 8.</p>
+<p><span class="lead">Workload with idle gaps.</span> In <code>spin_between_run_calls</code>, most workers have nothing to do during the 2-task launch. At p = 16, Sleep (280.2 ms) is 2.1× faster than Spin (592.9 ms), because sleeping workers leave the cores to the two threads doing real work. The same holds whenever p reaches the hardware-thread count. At p = 16, Sleep beats Spin on every workload, for example <code>super_super_light</code> 24.0 vs 259.7 ms and <code>math_operations_in_tight_for_loop</code> 214.8 vs 473.8 ms.</p>
+<p><span class="lead">Why neither is fastest everywhere.</span> Spinning trades CPU time for reaction time: it wins when launches are short and back to back and every spinner has a hardware thread to itself. Sleeping trades a few microseconds of wake-up latency per launch for zero cost while idle: it wins when workers are idle for long stretches, when there are more runnable threads than hardware threads, and when SMT siblings need the core. Neither cost dominates in all cases, so the faster implementation depends on the workload.</p>
+
 
 <!-- ============================================================ 6 -->
 <h2>6. Part 4 — Scheduling and granularity</h2>
@@ -209,7 +284,7 @@ while (true) {
 <h3>6.1 Static vs dynamic timelines (4 workers, handout pattern)</h3>
 <figure>
   <img src="figures/part4_timelines.png" alt="Gantt charts for static and dynamic assignment">
-  <figcaption>Figure 4.1 — Timelines for the 1,1,1,1,10,10,10,10 ms tasks on 4 workers. Gaps between bars are only visual separators.</figcaption>
+  <figcaption>Figure 6.1 — Timelines for the 1,1,1,1,10,10,10,10 ms tasks on 4 workers. Gaps between bars are only visual separators.</figcaption>
 </figure>
 <table class="std">
   <thead><tr><th>Assignment</th><th>W0 busy</th><th>W1 busy</th><th>W2 busy</th><th>W3 busy</th><th class="r">Makespan</th><th class="r">Mean utilization</th></tr></thead>
@@ -220,7 +295,29 @@ while (true) {
 </table>
 <p>Utilization = busy time ÷ makespan. Under static assignment, W0 and W1 finish their two 1 ms tasks at t = 2 ms and then sit idle for 18 ms, while W2 and W3 each run two 10 ms tasks back to back. With dynamic assignment, the four 1 ms tasks are claimed first. At t = 1 ms every worker claims one 10 ms task, and all finish at 11 ms. That equals total work ÷ p = 44/4, so it is optimal: 1.82× better than static.</p>
 
-<!--S6DATA-->
+<h3>6.2 Measured makespan</h3>
+<!--INCLUDE:generated/example.html-->
+<p>The measurements match the timelines within 0.15 ms for all three task systems: static 20.01–20.15 ms vs 20 ms, dynamic 11.01–11.13 ms vs 11 ms, serial 44.00 ms. Dynamic assignment is 1.8× faster with the same work.</p>
+
+<h3>6.3 Granularity experiment</h3>
+<p>The fine-grained workload has N = 2<sup>18</sup> items costing 0.1 µs or 1 µs. Its measured serial time is T<sub>1</sub> = 158.6 ms, so T ≈ 605 ns of useful work per item on average; the extra over the nominal 550 ns is the timer loop itself. The experiment uses five chunk sizes, from 1 item per task (262144 tasks) to 65536 items per task (4 tasks).</p>
+<!--INCLUDE:generated/granularity.html-->
+<figure>
+  <img src="figures/granularity.png" alt="Runtime vs chunk size for p = 4 and p = 16">
+  <figcaption>Figure 6.2 — Runtime vs chunk size (log scales). The dashed line is the ideal T<sub>1</sub>/p.</figcaption>
+</figure>
+<p><span class="lead">A chunk size that reduces scheduling overhead: 16, and beyond it 256.</span> At p = 4, chunk 1 costs 90.0 ms (Spin) and 80.2 ms (Sleep), more than twice the ideal 39.6 ms. Every item pays a mutex round trip. Chunk 16 divides the number of claims by 16 and brings both pools to 42.6–42.8 ms. Chunks 256 and 4096 reach 39.4–40.2 ms, within 1.5% of ideal.</p>
+<p><span class="lead">A chunk size that worsens load balance and reduces concurrency: 65536 = N/4.</span> There are now only 4 tasks. At p = 4, two tasks hold all the 1 µs items. Each takes about 69 ms, so the makespan is 69.3 ms: 1.75× the best chunk size, and exactly the static contiguous imbalance from Section 6.1, scaled up. At p = 16, the same 4 tasks leave 12 of the 16 workers with nothing to do, and the time stays at 69.5 ms against an ideal of 9.9 ms.</p>
+<p>At p = 16, even the best chunk (12.7 ms) is 1.3× the ideal. Two workers on one core slow each other's busy-wait loop, which itself performs work (reading the timer).</p>
+<p><span class="lead">Why very fine granularity destroys dynamic scheduling: H/T.</span> With c items per scheduled unit, a worker spends c·T on useful work and H on scheduling for each unit, so efficiency is at most cT/(cT + H) = 1/(1 + H/(cT)).</p>
+<p>From the chunk-1 and chunk-256 runs, I estimate H = (T<sub>p</sub>(1) − T<sub>p</sub>(256))·p/N:</p>
+<ul>
+  <li>Spawn (an atomic <code>fetch_add</code>): 169 ns at p = 4, 391 ns at p = 16.</li>
+  <li>Spin and Sleep (a mutex round trip): 764 and 609 ns at p = 4; 6.2 and 5.2 µs at p = 16.</li>
+</ul>
+<p>For the pools at p = 4, H/T ≈ 1.0–1.3, so at least half of every worker's time is scheduling. At p = 16, H/T ≈ 9. H grows with p because every claim goes through the same mutex: claims are serialized, so the pool cannot hand out more than about 3 million tasks per second (262144 claims in roughly 80–100 ms), no matter how many workers wait.</p>
+<p>Dynamic scheduling only pays off while H/T is small: its balance benefit is at most one unit's cost at the end of the launch, but its overhead is paid on every unit. Chunking divides the overhead per item by c (H/(16T) ≈ 0.08 at p = 4), and up to about 4096 items per task there are still enough tasks to balance the load. The cheaper atomic claim in Spawn keeps H/T at about 0.3 at p = 4, which is why Spawn is the fastest at chunk 1 (50.9 ms).</p>
+
 
 <!-- ============================================================ 7 -->
 <h2>7. Part 5 — Asynchronous task graphs with dependencies</h2>
@@ -267,14 +364,14 @@ std::deque&lt;TaskID&gt; ready_;                      // deps satisfied, tasks l
   <li>Dependencies are between whole launches: every task of a dependency must finish before any task of the dependent starts.</li>
 </ul>
 <p>Under these assumptions, a launch lasts at least as long as its longest task: A 1 ms, B 8 ms, C 4 ms, D 2 ms. The paths are A→B→D = 1 + 8 + 2 = 11 ms and A→C→D = 1 + 4 + 2 = 7 ms, so the <b>critical path is T<sub>∞</sub> = 11 ms</b> (through B). With p workers, T<sub>p</sub> ≥ max(T<sub>∞</sub>, W/p), giving <b>T<sub>2</sub> ≥ max(11, 116) = 116 ms</b> and <b>T<sub>4</sub> ≥ max(11, 58) = 58 ms</b>.</p>
-<p><span class="lead">Schedules for 2 and 4 workers.</span> Figure 5.1 is the greedy schedule my runtime follows: free workers claim the next task, and ready launches are served FIFO (B before C). Both schedules respect the dependencies, since B and C start only after the last A task and D only after the later of B and C. They also respect capacity: at most p tasks run at any time.</p>
+<p><span class="lead">Schedules for 2 and 4 workers.</span> Figure 7.1 is the greedy schedule my runtime follows: free workers claim the next task, and ready launches are served FIFO (B before C). Both schedules respect the dependencies, since B and C start only after the last A task and D only after the later of B and C. They also respect capacity: at most p tasks run at any time.</p>
 <ul>
   <li><b>2 workers.</b> A takes 0–64 ms (64 tasks each). Then B0 and B1 run on 64–72, C0–C5 three per worker on 72–84, and D 16 tasks each on 84–116. Makespan <b>116 ms</b>, equal to the bound: utilization 100%.</li>
   <li><b>4 workers.</b> A takes 0–32 ms. W0 and W1 run B0 and B1 on 32–40; W2 and W3 run C0–C3 on 32–40. W0 and W1 then run C4 and C5 on 40–44, while W2 and W3 sit idle for 4 ms because D cannot start before C ends. D runs on 44–60. Makespan <b>60 ms</b>, against the 58 ms bound: utilization 232/(4×60) = 97%. 58 ms cannot actually be reached: the B/C phase packs tasks of 8, 8, 4, 4, 4, 4, 4 and 4 ms onto 4 workers, and no packing finishes in under 12 ms (an 8 ms task cannot share a worker with a 4 ms one within 10 ms).</li>
 </ul>
 <figure>
   <img src="figures/part5_schedules.png" alt="Schedules of the A, B, C, D graph on 2 and 4 workers">
-  <figcaption>Figure 5.1 — Valid schedules for the dependency graph with 2 and 4 workers. Repeated short tasks of A and D are drawn as one bar per worker.</figcaption>
+  <figcaption>Figure 7.1 — Valid schedules for the dependency graph with 2 and 4 workers. Repeated short tasks of A and D are drawn as one bar per worker.</figcaption>
 </figure>
 <p><span class="lead">Why doubling the workers does not halve the time.</span> The same greedy schedule gives 232, 116, 60, 32 and 20 ms for p = 1, 2, 4, 8 and 16, i.e. ×2.0, ×1.93, ×1.88 and ×1.6 per doubling. Three effects stop the halving:</p>
 <ol>
@@ -305,14 +402,81 @@ std::deque&lt;TaskID&gt; ready_;                      // deps satisfied, tasks l
   <li>Workers take tasks only from <code>ready_</code>.</li>
 </ol>
 
-<!--S7DATA-->
+<h3>7.4 Measured results</h3>
+<!--INCLUDE:generated/dag.html-->
+<p>With 2–8 workers, the measured makespans are within 0.2 ms of the hand-computed schedules: 116.2 ms at p = 2 against the bound of 116, 60.1 ms at p = 4, and 32.1 ms at p = 8. Doubling p from 2 to 4 gives 1.93×, not 2×, exactly as the barrier analysis predicts. At p = 16, every hardware thread runs a busy-waiting worker, so any operating-system activity preempts one of them. Both variants come out about 3 ms above the schedule there (23.1 vs 20 ms and 18.7 vs 16 ms).</p>
+<p><span class="lead">Splitting the long launch B into four independent sub-launches.</span> Splitting B into B1–B4 (2 tasks × 2 ms each) shortens the critical path from 11 ms (A→B→D) to 7 ms (A→C→D, with C now the longest), and adds 6 more tasks that can run at the same time.</p>
+<ul>
+  <li><b>p = 2 and p = 4: no gain.</b> Measured 116.2 vs 116.2 ms and 60.2 vs 60.1 ms. With 2 workers the time is set by the total work (232/2 = 116 ms), so extra parallelism cannot help. With 4 workers the ready queue is FIFO, so the eight 2 ms B tasks run first and C's 4 ms tasks form the tail (B tasks on 32–36 ms, C on 36–44 ms). The B/C phase still lasts 12 ms. Running the long tasks first would finish it in 10 ms (58 ms in total), so the benefit also depends on the scheduler's order.</li>
+  <li><b>p = 8 and p = 16: it helps.</b> 32.1 → 30.1 ms and 23.1 → 18.7 ms, because the B/C phase is no longer limited by B's 8 ms tasks.</li>
+</ul>
+<p>The extra launches are not free. Each one costs a hash-table entry, a dependency edge (D now has 5 dependencies instead of 2), a pass through <code>launchFinished</code> and a wake-up of the workers: roughly 10–40 µs each. <code>super_super_light_async</code> runs 400 launches of tiny tasks in about 17 ms, i.e. about 40 µs per launch including its 64 tasks. Against millisecond tasks this is negligible, but if B's tasks took a few microseconds, three extra launches would cost more than the parallelism saves. So extra concurrency helps only when there are idle workers to use it, when the scheduler orders the work well, and when task cost far exceeds launch cost.</p>
+<p><span class="lead">Independent launches run concurrently.</span> The table below submits the same bulk launches with <code>run()</code> (one launch at a time) and with <code>runAsyncWithDeps()</code> followed by a single <code>sync()</code>.</p>
+<!--INCLUDE:generated/sync_async.html-->
+<p><code>…_fewer_tasks</code> has only 9 tasks per launch. With <code>run()</code>, at most 9 of the 16 workers are busy and every launch ends at a barrier. Submitted asynchronously, the 2000 launches have no dependencies, so free workers take tasks from the next ready launch while the current one finishes: 282.7 → 121.6 ms at p = 16 (2.3×). <code>…_fan_in</code> gains 1.2× at p = 16. Its 256 math launches overlap, but the final reduce depends on all of them, so the critical path still ends with one serial task.</p>
+<p>At p = 1, the synchronous column pays two sleep/wake round trips per launch: the single worker and the waiting caller each sleep and are woken, and each of the 2000 launches incurs this. Most of the p = 1 difference comes from that.</p>
 
-<!--S8-->
+
+<!-- ============================================================ 8 -->
+<h2 class="page-break">8. Combined performance analysis</h2>
+<figure>
+  <img src="figures/runtime.png" alt="Runtime vs workers">
+  <figcaption>Figure 8.1 — Runtime vs number of workers (log scale) for Spawn, Spin and Sleep. The dashed line is the serial T<sub>1</sub>.</figcaption>
+</figure>
+<figure>
+  <img src="figures/speedup.png" alt="Speedup vs workers">
+  <figcaption>Figure 8.2 — Speedup S<sub>p</sub> = T<sub>1</sub>/T<sub>p</sub>. The dashed line is ideal speedup; the solid line marks S = 1.</figcaption>
+</figure>
+<figure>
+  <img src="figures/efficiency.png" alt="Efficiency vs workers">
+  <figcaption>Figure 8.3 — Efficiency E<sub>p</sub> = S<sub>p</sub>/p for six workloads with different characteristics. The full numbers for all workloads are in Appendix A.</figcaption>
+</figure>
+
+<h3>8.1 Dominant limitation of each workload</h3>
+<table class="std">
+  <thead><tr><th>Workload</th><th>Dominant limitation</th><th>Evidence</th></tr></thead>
+  <tbody>
+    <tr><td><code>super_super_light</code></td><td>Thread-management overhead (Spawn); synchronization (pools)</td><td>About 31 µs of work per launch. Spawn: S<sub>16</sub> = 0.07, about 20 µs per thread created. Even Sleep peaks at S = 0.91: it waits 8–12 µs per launch for wake-ups.</td></tr>
+    <tr><td><code>super_light</code></td><td>Task granularity, plus per-launch overhead</td><td>0.29 ms of work per launch. Spawn S<sub>8</sub> = 1.39 vs Spin S<sub>8</sub> = 5.31; no implementation exceeds 5.3.</td></tr>
+    <tr><td><code>ping_pong_equal</code></td><td>Synchronization at the end of each launch, plus shared L3 traffic</td><td>Sleep S<sub>8</sub> = 7.0 but only 7.2 at 16. Spawn levels off at 5.4 (thread management).</td></tr>
+    <tr><td><code>ping_pong_unequal</code></td><td>Load imbalance at the end of each launch (mostly removed by dynamic claiming)</td><td>Efficiency matches the equal version (Sleep E<sub>8</sub> = 0.91), so the skew is absorbed.</td></tr>
+    <tr><td><code>recursive_fibonacci</code></td><td>None of the software limits up to 8; at 16, only SMT</td><td>S<sub>8</sub> = 7.4–7.6, S<sub>16</sub> = 7.6–7.8 (Spin 6.2, its own spinning).</td></tr>
+    <tr><td><code>math_operations_in_tight_for_loop</code></td><td>Task granularity and synchronization (16 small tasks per launch, 2000 launches)</td><td>Spawn S<sub>16</sub> = 1.21; Sleep S<sub>16</sub> = 5.25.</td></tr>
+    <tr><td><code>…_fewer_tasks</code></td><td>Insufficient concurrency (9 tasks per launch)</td><td>Sleep: 285.3 ms at p = 8, 277.5 ms at p = 16. Async submission reaches 121.6 ms.</td></tr>
+    <tr><td><code>…_fan_in</code> / <code>…_reduction_tree</code></td><td>Insufficient concurrency in the reduce phase (single-task launches)</td><td>Sleep S<sub>16</sub> = 7.5 / 8.3, half of ideal.</td></tr>
+    <tr><td><code>spin_between_run_calls</code></td><td>Insufficient concurrency (2 tasks); idle waiting for Spin</td><td>S stuck at 2.0 for every p ≥ 2; Spin S<sub>16</sub> = 0.94.</td></tr>
+    <tr><td><code>mandelbrot_chunked</code></td><td>No significant limit; it scales close to ideal</td><td>S<sub>8</sub> = 7.9, S<sub>16</sub> = 14.6 (Sleep). Interleaved rows balance the work.</td></tr>
+  </tbody>
+</table>
+
+<h3>8.2 Predictions: confirmed and contradicted</h3>
+<p><span class="verdict-ok">Confirmed.</span> <code>super_super_light</code> scaled worst: Spawn is slower than serial at every p (S = 0.07–0.47). Also as predicted:</p>
+<ul>
+  <li>The spinning pool beat Spawn most on many-launch workloads (3.8× on <code>super_light</code> at p = 8) and tied on <code>mandelbrot_chunked</code>.</li>
+  <li>Sleep was slower than Spin on <code>super_super_light</code> for p ≤ 8, and 2.1× faster on <code>spin_between_run_calls</code> at p = 16.</li>
+  <li>Part 4: static 20.07 ms vs dynamic 11.06 ms. Chunk 1 was the slowest dynamic setting for the pools (H/T ≈ 1.0–1.3), and chunk 65536 was 1.75× slower than the best chunk size.</li>
+  <li>Part 5: 116.2 / 60.1 / 32.1 ms. Splitting B helped only at p ≥ 8.</li>
+</ul>
+<p><span class="verdict-no">Contradicted.</span> I predicted <code>recursive_fibonacci</code> would scale best and gain 10–30% from SMT at p = 16. It gained nothing (7.61 → 7.64 for Spawn). <code>mandelbrot_chunked</code> scaled best: 7.94 at p = 8 and 14.2–14.6 at p = 16, i.e. SMT nearly doubled its speed.</p>
+<p>The difference is how fully one thread uses a core:</p>
+<ul>
+  <li><b>Mandelbrot.</b> The inner loop is a chain of dependent floating-point multiplies and adds. Each operation waits about 4 cycles for the previous result, so one thread leaves most of the core's issue slots empty, and an SMT sibling fills them almost for free.</li>
+  <li><b>fib(25).</b> It is call- and branch-heavy integer code with short dependencies, so one thread already keeps the core's front end and integer units busy. A sibling only splits the same resources.</li>
+</ul>
+<p>I had treated "compute-bound" as one category; SMT gains depend on how much idle capacity each core has. My ping_pong prediction was also too pessimistic. It reached S<sub>8</sub> ≈ 7, not saturation at 4–8, because the 4 MB of arrays fit in the 16 MB L3 and each worker's slice stays in its own core's cache.</p>
+
+<h3>8.3 When each design is appropriate</h3>
+<ul>
+  <li><b>Spawn</b> suits rare, coarse launches: a few launches of tens of milliseconds, as in <code>mandelbrot_chunked</code> and <code>recursive_fibonacci</code>, where it matched the pools within 1–3%. It also suits code that must not keep idle threads alive between calls, since it is the simplest design with no shutdown logic. Avoid it when launches are frequent or short: it pays about 15–20 µs per thread per launch (S<sub>16</sub> = 0.07 on <code>super_super_light</code>).</li>
+  <li><b>Spinning pool</b> suits frequent, short launches on a machine dedicated to the program, with p no larger than the number of cores, so every spinner has a core to itself. There it has the lowest launch latency (fastest on <code>super_super_light</code> and <code>super_light</code> at p ≤ 8). Avoid it when some workers often have no work, when p reaches the hardware-thread count (from p = 8 to p = 16 it got slower on 10 of the 11 workloads), and on shared or battery-powered machines.</li>
+  <li><b>Sleeping pool</b> is the general-purpose default. It is within a few percent of Spin when launches are back to back, by far the best at p = 16, robust to idle gaps and to running more threads than cores, and it is the design that extends naturally to asynchronous launches with dependencies (Part 5). Its cost is a wake-up latency of about 10 µs per launch, which matters only when a launch contains a few tens of microseconds of work.</li>
+</ul>
+
 
 <!-- ============================================================ APPENDIX A -->
 <section class="wide">
 <h2 class="page-break">Appendix A — T<sub>1</sub>, T<sub>p</sub>, S<sub>p</sub>, E<sub>p</sub> for every reported measurement</h2>
-<p class="small muted">Every time is the minimum of 5 runs. T<sub>1</sub> is the supplied serial implementation (minimum of its 25 runs). S<sub>p</sub> = T<sub>1</sub>/T<sub>p</sub>, E<sub>p</sub> = S<sub>p</sub>/p, and p is the number of worker threads. Part 4 and Part 5 measurements are in Tables 6.1–7.3.</p>
+<p class="small muted">Every time is the minimum of 5 runs. T<sub>1</sub> is the supplied serial implementation (minimum of its 25 runs). S<sub>p</sub> = T<sub>1</sub>/T<sub>p</sub>, E<sub>p</sub> = S<sub>p</sub>/p, and p is the number of worker threads. Part 4 and Part 5 measurements are in Sections 6 and 7.</p>
 <!--INCLUDE:generated/table_all.html-->
 </section>
 
@@ -332,8 +496,7 @@ std::deque&lt;TaskID&gt; ready_;                      // deps satisfied, tasks l
 <h3>B.3 <code>part5_async_deps</code> — <code>./runtasks -n 16 -i 1 simple_run_deps_test</code></h3>
 <p class="small muted">The tasks sleep for 1, 5 and 10 s, so this test was run once. The serial stubs take about 160 s each.</p>
 <!--INCLUDE-PRE:results/evidence_part5_simple_run_deps.txt-->
-<h3>B.4 Comparison with the supplied reference binary — <code>python3 ../tests/run_test_harness.py -n 16</code></h3>
-<!--INCLUDE-PRE:results/harness_part1to4.txt-->
+
 
 </body>
 </html>
